@@ -56,9 +56,12 @@ W_OUT = 60.0
 W_NEAR = 12.0
 W_EDGE = 6.0
 W_FLOW = 4.0
-W_ALIGN = 1.0
-W_GROUP = 2.0
+W_ALIGN = 4.0
+W_GROUP = 4.0
 W_APART = 10.0
+CON_WEIGHTS = {"near": W_NEAR, "edge": W_EDGE, "flow": W_FLOW, "align": W_ALIGN, "group": W_GROUP,
+               "apart": W_APART}
+MET_MM = 0.05   # a constraint within this many millimetres counts as met
 
 
 class Placer:
@@ -163,7 +166,8 @@ class Placer:
             max(0.0, y1 - (self.height - m))
         return d * (1 + d)
 
-    def con_cost(self, k: int) -> float:
+    def violation(self, k: int) -> float:
+        """How far constraint k is from being met, in millimetres (0 when met)."""
         c = self.constraints[k]
         t = c["type"]
         idx = self.idx
@@ -179,8 +183,7 @@ class Placer:
                 target = target or [self.center(b)]
                 mine = mine or [self.center(a)]
             d = min(math.hypot(p[0] - q[0], p[1] - q[1]) for p in mine for q in target)
-            over = d - c.get("max_mm", 3.0)
-            return W_NEAR * over * over if over > 0 else 0.0
+            return max(0.0, d - c.get("max_mm", 3.0))
         if t == "edge":
             a = idx.get(c["ref"])
             if a is None:
@@ -191,8 +194,7 @@ class Placer:
                      "bottom": (self.height - m) - y1}
             side = c.get("side", "any")
             d = min(dists.values()) if side == "any" else dists[side]
-            d = max(0.0, d - 0.3)  # within 0.3 mm of the keep-in line counts as "on the edge"
-            return W_EDGE * d * d
+            return max(0.0, d - 0.3)  # within 0.3 mm of the keep-in line counts as "on the edge"
         if t in ("flow", "align", "group"):
             ids = [idx[r] for r in c["refs"] if r in idx]
             cs = [self.center(i) for i in ids]
@@ -200,28 +202,26 @@ class Placer:
                 return 0.0
             axis = 0 if c.get("axis", "x") == "x" else 1
             if t == "flow":
-                cost = 0.0
-                for (p, q) in zip(cs, cs[1:]):
-                    gap = q[axis] - p[axis] - 1.0
-                    if gap < 0:
-                        cost += W_FLOW * gap * gap
-                return cost
+                return sum(max(0.0, 1.0 - (q[axis] - p[axis])) for p, q in zip(cs, cs[1:]))
             if t == "align":
                 other = 1 - axis
                 mean = sum(p[other] for p in cs) / len(cs)
-                return W_ALIGN * sum((p[other] - mean) ** 2 for p in cs)
+                return max(0.0, sum(abs(p[other] - mean) for p in cs) - 0.05)
             spread = max(math.hypot(p[0] - q[0], p[1] - q[1]) for p in cs for q in cs)
-            over = spread - c.get("max_mm", 10.0)
-            return W_GROUP * over * over if over > 0 else 0.0
+            return max(0.0, spread - c.get("max_mm", 10.0))
         if t == "apart":
             a, b = idx.get(c["ref"]), idx.get(c["to"])
             if a is None or b is None:
                 return 0.0
             pa, pb = self.center(a), self.center(b)
-            d = math.hypot(pa[0] - pb[0], pa[1] - pb[1])
-            under = c["min_mm"] - d
-            return W_APART * under * under if under > 0 else 0.0
+            return max(0.0, c["min_mm"] - math.hypot(pa[0] - pb[0], pa[1] - pb[1]))
         return 0.0
+
+    def con_cost(self, k: int) -> float:
+        # Linear plus quadratic: a purely quadratic penalty has no pull at the boundary, so
+        # wirelength always wins by a hair and parts settle just short of where they belong.
+        v = self.violation(k)
+        return CON_WEIGHTS.get(self.constraints[k]["type"], 1.0) * v * (1.0 + v)
 
     def local_cost(self, items: tuple[int, ...]) -> float:
         nets = set()
@@ -246,8 +246,10 @@ class Placer:
         ov = sum(self.overlap(i, j) for i in range(self.n) for j in range(i + 1, self.n))
         out = sum(self.outside(i) for i in range(self.n))
         cons = {k: self.con_cost(k) for k in range(len(self.constraints))}
+        viol = {k: self.violation(k) for k in range(len(self.constraints))}
         return {"wirelength": wl, "overlap": ov, "outside": out, "constraints": sum(cons.values()),
-                "total": wl + W_OVERLAP * ov + W_OUT * out + sum(cons.values()), "per_constraint": cons}
+                "total": wl + W_OVERLAP * ov + W_OUT * out + sum(cons.values()), "per_constraint": cons,
+                "violation_mm": viol, "unmet": sum(1 for v in viol.values() if v > MET_MM)}
 
     # --- annealing ----------------------------------------------------------------
     def initial(self) -> None:
@@ -391,29 +393,37 @@ def estimate_board(items: list[Item], spacing: float, margin: float, max_w: floa
 
 def place(items: list[Item], constraints: list[dict], board: dict | None = None, seed: int = 1,
           spacing: float = 0.5, margin: float = 0.6, net_weights: dict[str, float] | None = None,
-          attempts: int = 6) -> PlaceResult:
+          attempts: int = 6, starts: int = 3) -> PlaceResult:
+    """Anneal `starts` times per board size and keep the best legal result.
+
+    Best means fewest unmet constraints, then lowest cost. If no start is legal
+    the board grows by 15% (within the limits) and it tries again.
+    """
     board = board or {}
     max_w, max_h = board.get("max_width_mm"), board.get("max_height_mm")
     margin = board.get("margin_mm", margin)
     w, h = estimate_board(items, spacing, margin, max_w, max_h)
-    all_frames: list[dict] = []
-    last = None
+    best = None
     for attempt in range(attempts):
-        p = Placer(items, constraints, w, h, margin, spacing, net_weights, seed + attempt)
-        p.initial()
-        frames = p.anneal()
-        issues = p.legalize()
-        frames.append(p.snapshot())
-        all_frames = [{"board": [w, h], "positions": f} for f in frames]
-        cost = p.total_cost()
-        last = PlaceResult(w, h, {it.ref: (p.x[i], p.y[i], p.q[i] * 90) for i, it in enumerate(items)},
-                           all_frames, cost, not issues, issues)
-        if not issues:
-            return last
+        for s in range(starts):
+            p = Placer(items, constraints, w, h, margin, spacing, net_weights, seed + 1000 * attempt + s)
+            p.initial()
+            frames = p.anneal()
+            issues = p.legalize()
+            frames.append(p.snapshot())
+            cost = p.total_cost()
+            result = PlaceResult(w, h, {it.ref: (p.x[i], p.y[i], p.q[i] * 90) for i, it in enumerate(items)},
+                                 [{"board": [w, h], "positions": f} for f in frames], cost, not issues, issues)
+            key = (not result.legal, cost["unmet"], cost["total"])
+            if best is None or key < best[0]:
+                best = (key, result)
+        if best[1].legal:
+            return best[1]
         grow_w = not max_w or w * 1.15 <= max_w
         grow_h = not max_h or h * 1.15 <= max_h
         if not grow_w and not grow_h:
             break
         w = math.ceil(w * 1.15) if grow_w else w
         h = math.ceil(h * 1.15) if grow_h else h
-    return last
+        best = None
+    return best[1] if best else None

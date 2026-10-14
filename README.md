@@ -55,9 +55,11 @@ board ◄── KiCad DRC ◄── Freerouting ◄── placer ◄── const
    JLCPCB BOM.
 5. **Lay out.** `pcb_layout` takes placement constraints, never coordinates: "C1 near U1's IN pin",
    "J1 on the left edge", "J1 → U1 → J2 left to right". Datasheet capacitors and connectors get their
-   constraints automatically. A deterministic simulated-annealing placer positions the parts. Track widths
-   come from the simulated net currents (IPC-2221). Freerouting draws the copper, ground pours are added,
-   and KiCad's DRC must report 0 errors and 0 unconnected items.
+   constraints automatically. A deterministic simulated-annealing placer positions the parts: it anneals
+   three times and keeps the legal result that meets the most constraints, and it reports each unmet
+   constraint with how many millimetres it is off. Track widths come from the simulated net currents
+   (IPC-2221). Freerouting draws the copper; any stub it leaves with a free end is removed. Ground pours are
+   added, and KiCad's DRC must report 0 errors and 0 unconnected items.
 6. **Watch and build.** The `layout/` folder is a normal KiCad project (`.kicad_pro`, `.kicad_sch`,
    `.kicad_pcb`), with every footprint linked to its schematic symbol. The placement and routing are
    recorded: `pcbagent replay` opens the board in KiCad's PCB editor and plays the whole sequence back
@@ -218,6 +220,8 @@ container.
   known gap.
 - Two-layer boards, one side, simple rectangular outline. The placer is a solid baseline, not a
   professional layout engine.
+- Placement is deterministic for a given seed, but Freerouting is not: two runs of the same design can
+  produce different copper. Both always go through the same DRC.
 - The JLCPCB CPL uses KiCad's rotations. Some packages (SOT-223, SOT-23, polarised parts) are rotated
   differently in JLCPCB's system, so check their DFM preview.
 - Tested here with KiCad **7.0.11**, ngspice 42, Freerouting 2.1.0, Java 21 and Pi 1.2.0. The KiCad 8+

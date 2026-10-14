@@ -183,6 +183,41 @@ def _add_zone(board, net, layer_name: str, x0, y0, x1, y1, clearance: float, min
     return zone
 
 
+def _remove_stubs(board) -> list:
+    """Delete routed segments with a free end (Freerouting occasionally leaves short stubs).
+
+    Removing one stub can expose the next, so repeat until none are left. Ends
+    inside a pad count as connected. Returns the removed segments as
+    [x1, y1, x2, y2, layer, net] in mm (none if this KiCad's Python API lacks
+    the dangling test).
+    """
+    removed = []
+    for _ in range(20):
+        board.BuildConnectivity()
+        conn = board.GetConnectivity()
+        stubs = []
+        for t in board.GetTracks():
+            if t.GetClass() != "PCB_TRACK":
+                continue
+            try:
+                dangling = conn.TestTrackEndpointDangling(t, False)
+            except TypeError:
+                try:
+                    dangling = conn.TestTrackEndpointDangling(t)
+                except Exception:  # noqa: BLE001
+                    return removed
+            if dangling:
+                stubs.append(t)
+        if not stubs:
+            break
+        for t in stubs:
+            removed.append([round(pcbnew.ToMM(t.GetStart().x), 4), round(pcbnew.ToMM(t.GetStart().y), 4),
+                            round(pcbnew.ToMM(t.GetEnd().x), 4), round(pcbnew.ToMM(t.GetEnd().y), 4),
+                            board.GetLayerName(t.GetLayer()), t.GetNetname()])
+            board.Delete(t) if hasattr(board, "Delete") else board.Remove(t)
+    return removed
+
+
 def route(job: dict) -> dict:
     board = pcbnew.LoadBoard(job["board_path"])
     with open(job["ses_path"]) as fh:
@@ -219,6 +254,8 @@ def route(job: dict) -> dict:
         via.SetNet(net)
         board.Add(via)
         vias += 1
+    stubs = _remove_stubs(board)
+    tracks -= len(stubs)
     zones = 0
     pour = job.get("pour")
     if pour:
@@ -248,7 +285,7 @@ def route(job: dict) -> dict:
             pcbnew.WriteDRCReport(board, job["drc_report"], units, True)
             report = job["drc_report"]
     return {"ok": True, "board": job["out_path"], "tracks": tracks, "vias": vias, "zones": zones,
-            "missing_nets": sorted(missing), "drc_report": report, "wires": parsed["wires"], "via_list": parsed["vias"]}
+            "stubs_removed": stubs, "missing_nets": sorted(missing), "drc_report": report, "wires": parsed["wires"], "via_list": parsed["vias"]}
 
 
 def main() -> int:

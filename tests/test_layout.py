@@ -83,7 +83,7 @@ def test_placer_is_legal_deterministic_and_honours_near():
     b = place(items, cons, seed=3)
     assert a.legal, a.issues
     assert a.positions == b.positions
-    assert a.cost["per_constraint"][0] < 0.05  # C1 within 2.5 mm of U1 pin IN
+    assert a.cost["violation_mm"][0] == 0 and a.cost["unmet"] == 0  # C1 within 2.5 mm of U1 pin IN; J1, J2 on edges
     jx = a.positions["J1"][0]
     assert jx < a.width / 3 and a.positions["J2"][0] > 2 * a.width / 3
 
@@ -142,6 +142,8 @@ def test_full_pipeline_routes_drc_clean(tmp_path, example):
     res = pipeline.run(p, load_example(example, "constraints"))
     assert res["passed"], res.get("message")
     assert res["drc"]["errors"] == 0 and res["drc"]["unconnected"] == 0
+    assert "track_dangling" not in res["drc"]["warning_types"]  # Freerouting stubs are pruned
+    assert all(c["satisfied"] for c in res["constraints"]), [c for c in res["constraints"] if not c["satisfied"]]
     assert res["freerouting"]["ok"]
     board = Path(p.state()["layout"]["board"])
     assert board.exists() and board.with_suffix(".kicad_pro").exists()

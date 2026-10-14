@@ -20,7 +20,7 @@ from ..kicad import libs
 from ..kicad.tools import ToolMissing, find_kicad_python, kicad_version
 from . import constraints as cons_mod
 from . import freerouting
-from .placer import Item, place
+from .placer import MET_MM, Item, place
 
 ORIGIN = (100.0, 80.0)  # board top-left on the KiCad page, mm
 
@@ -124,9 +124,10 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
     issues = list(placed.issues)
     cons_report = []
     for k, c in enumerate(merged):
-        cost = placed.cost["per_constraint"].get(k, 0.0)
+        off = placed.cost["violation_mm"].get(k, 0.0)
         cons_report.append({**{kk: vv for kk, vv in c.items() if kk != "auto"}, "auto": c.get("auto", False),
-                            "satisfied": cost < 0.05, "penalty": round(cost, 3)})
+                            "satisfied": off <= MET_MM, "off_mm": round(off, 2),
+                            "penalty": round(placed.cost["per_constraint"].get(k, 0.0), 3)})
 
     from ..kicad.schematic import footprint_paths
     sym_paths = footprint_paths(circuit)
@@ -203,9 +204,10 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
         _finish(project, layout_dir, result, trace, started)
         return result
 
-    trace["routing"] = _routing_frames(routed["wires"], routed["via_list"])
+    stubs = routed.get("stubs_removed", [])
+    trace["routing"] = _routing_frames(routed["wires"], routed["via_list"], stubs)
     result.update(tracks=routed["tracks"], vias=routed["vias"], zones=routed["zones"],
-                  missing_nets=routed["missing_nets"])
+                  stubs_removed=len(stubs), missing_nets=routed["missing_nets"])
     cli = drc_mod.run_cli(routed_path, layout_dir / "drc.json")
     if cli is not None:
         parsed = cli
@@ -229,7 +231,16 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
     return result
 
 
-def _routing_frames(wires: list[dict], vias: list[dict]) -> list[dict]:
+def _routing_frames(wires: list[dict], vias: list[dict], stubs: list | None = None) -> list[dict]:
+    def is_stub(x1, y1, x2, y2, layer, net):
+        for sx1, sy1, sx2, sy2, slayer, snet in stubs or []:
+            if (snet, slayer) != (net, layer):
+                continue
+            for (ax, ay, bx, by) in ((sx1, sy1, sx2, sy2), (sx2, sy2, sx1, sy1)):
+                if max(abs(ax - x1), abs(ay - y1), abs(bx - x2), abs(by - y2)) < 0.002:
+                    return True
+        return False
+
     order: list[str] = []
     by_net: dict[str, dict] = {}
     for w in wires:
@@ -238,6 +249,8 @@ def _routing_frames(wires: list[dict], vias: list[dict]) -> list[dict]:
             by_net[w["net"]] = {"net": w["net"], "tracks": [], "vias": []}
         pts = w["points"]
         for a, b in zip(pts, pts[1:]):
+            if is_stub(a[0], a[1], b[0], b[1], w["layer"], w["net"]):
+                continue
             by_net[w["net"]]["tracks"].append([round(a[0], 4), round(a[1], 4), round(b[0], 4), round(b[1], 4),
                                                round(w["width"], 4), w["layer"]])
     for v in vias:
@@ -266,7 +279,7 @@ def summarize(result: dict) -> str:
     for c in bad[:6]:
         who = c.get("ref") or ",".join(c.get("refs", []))
         lines.append(f"  constraint not met: {c['type']} {who}" + (f" -> {c['to']}" if c.get("to") else "")
-                     + f" (penalty {c['penalty']})")
+                     + f" (off by {c['off_mm']} mm)")
     if result.get("netclasses"):
         lines.append("  track widths from simulated currents: " + ", ".join(
             f"{'/'.join(nc['nets'])} {nc['track']} mm" for nc in result["netclasses"]))
