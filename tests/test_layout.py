@@ -127,8 +127,12 @@ def test_schematic_round_trips_through_kicad(tmp_path, example):
     assert comps["J1"].startswith("Connector_PinHeader_2.54mm:")
 
 
+ALL_EXAMPLES = sorted(p.name for p in (Path(__file__).resolve().parents[1] / "examples").iterdir()
+                      if (p / "constraints.json").exists())
+
+
 @needs_layout
-@pytest.mark.parametrize("example", ["divider", "ldo"])
+@pytest.mark.parametrize("example", ALL_EXAMPLES)
 def test_full_pipeline_routes_drc_clean(tmp_path, example):
     from pcbagent.layout import pipeline
     from pcbagent.project import Project

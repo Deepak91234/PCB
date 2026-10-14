@@ -1,0 +1,17 @@
+{
+  "title": "3.3 V power indicator LED",
+  "summary": "Red LED with a series resistor; LED current must stay 2-4 mA across LED forward-voltage spread and resistor tolerance.",
+  "ports": [
+    {"net": "V3V3", "role": "power_in", "description": "3.3 V rail"},
+    {"net": "GND", "role": "ground"}
+  ],
+  "conditions": [
+    {"id": "nominal", "sources": [{"net": "V3V3", "volts": 3.3}]},
+    {"id": "rail_high", "description": "rail at +5 %", "sources": [{"net": "V3V3", "volts": 3.465}]}
+  ],
+  "requirements": [
+    {"id": "led_current", "condition": "nominal", "measure": {"type": "component_current", "ref": "D1", "pin": "A"}, "min": 0.002, "max": 0.004},
+    {"id": "led_current_high", "condition": "rail_high", "measure": {"type": "component_current", "ref": "D1", "pin": "A"}, "min": 0.002, "max": 0.004},
+    {"id": "supply_current", "condition": "rail_high", "measure": {"type": "source_current", "net": "V3V3"}, "max": 0.005}
+  ]
+}

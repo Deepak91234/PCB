@@ -1,0 +1,1 @@
+Anti-aliasing RC low-pass filter for an ADC: 1 kHz corner (within 15 %), at least 15 dB down at 10 kHz.

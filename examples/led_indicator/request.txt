@@ -1,0 +1,1 @@
+Power indicator LED for a 3.3 V rail, 2 to 4 mA, from a 2-pin header.

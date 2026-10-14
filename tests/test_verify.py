@@ -150,3 +150,23 @@ def test_enable_pin_tied_high_works(tmp_path):
     rep = run(load_example("ldo", "spec"), circ, tmp_path)
     assert req(rep, "vout_full_load")["passed"]
     assert not any(c["check"] == "enable_high" and not c["passed"] for c in rep["ratings"])
+
+
+EXAMPLES = sorted(p.name for p in (Path(__file__).resolve().parents[1] / "examples").iterdir()
+                  if (p / "spec.json").exists())
+
+
+@pytest.mark.parametrize("example", EXAMPLES)
+def test_every_bundled_example_verifies(tmp_path, example):
+    rep = run(load_example(example, "spec"), load_example(example, "circuit"), tmp_path)
+    assert rep["passed"], [r["message"] for r in rep["requirements"] if not r["passed"]]
+
+
+def test_led_example_with_390_ohms_fails_only_at_a_corner(tmp_path):
+    """The worked case from the README: nominal passes, worst-case corner does not."""
+    circ = load_example("led_indicator", "circuit")
+    circ["components"][1]["value"] = "390"
+    rep = run(load_example("led_indicator", "spec"), circ, tmp_path)
+    r = req(rep, "led_current")
+    assert 0.002 <= r["nominal"] <= 0.004 and not r["passed"]
+    assert r["max"] > 0.004

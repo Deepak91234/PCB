@@ -1,0 +1,5 @@
+{"constraints": [
+  {"type": "edge", "ref": "J1", "side": "left"},
+  {"type": "flow", "refs": ["J1", "R1", "D1"], "axis": "x"},
+  {"type": "align", "refs": ["R1", "D1"], "axis": "x"}
+]}

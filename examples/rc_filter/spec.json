@@ -1,0 +1,17 @@
+{
+  "title": "1 kHz RC anti-aliasing filter",
+  "summary": "First-order RC low-pass in front of an ADC input with 10 MOhm input impedance.",
+  "ports": [
+    {"net": "VIN", "role": "signal_in"},
+    {"net": "VOUT", "role": "signal_out", "description": "to ADC"},
+    {"net": "GND", "role": "ground"}
+  ],
+  "conditions": [
+    {"id": "ac", "description": "small-signal sweep, ADC input as load", "sources": [{"net": "VIN", "volts": 0}], "loads": [{"net": "VOUT", "ohms": 10000000}]}
+  ],
+  "requirements": [
+    {"id": "corner", "condition": "ac", "measure": {"type": "cutoff_hz", "input": "VIN", "output": "VOUT"}, "target": 1000, "tolerance": {"pct": 15}},
+    {"id": "passband", "condition": "ac", "measure": {"type": "gain_db", "input": "VIN", "output": "VOUT", "hz": 100}, "min": -0.5},
+    {"id": "stopband", "condition": "ac", "measure": {"type": "gain_db", "input": "VIN", "output": "VOUT", "hz": 10000}, "max": -15}
+  ]
+}

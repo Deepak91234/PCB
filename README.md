@@ -97,8 +97,16 @@ databases are also accepted.
 ### 2. See the pipeline without any LLM
 
 ```bash
-pcbagent demo ldo --fab --watch     # also: pcbagent demo divider
+pcbagent demo ldo --fab --watch     # or: divider, led_indicator, rc_filter, lipo_3v3
 ```
+
+| Example | What it exercises |
+|---|---|
+| `divider` | 5 V → 3.3 V ADC scaling with the ADC's input impedance as the load |
+| `ldo` | AMS1117 regulator at 500 mA: dropout at 4.75 V input, load regulation, junction temperature |
+| `led_indicator` | LED current held to 2–4 mA across LED forward-voltage spread and resistor tolerance |
+| `rc_filter` | AC analysis: −3 dB corner and stopband attenuation, with capacitor tolerance corners |
+| `lipo_3v3` | XC6206 from a LiPo cell: low-battery dropout, µA sleep current, JST PH battery connector |
 
 This runs the bundled example's spec, circuit and constraints through simulation, verification, sourcing,
 placement, routing, DRC and fab export, then replays the layout in KiCad. Without a catalog it falls back
@@ -188,7 +196,10 @@ container.
   from model output (part of the security story) and drops the PySpice dependency. One IR drives the SPICE
   deck, the KiCad netlist, the BOM and the layout, so they cannot disagree.
 - **Worst-case verification.** "The nominal simulation passes" is not "the board meets spec". Requirements
-  must hold at every tolerance corner of the parts actually ordered.
+  must hold at every tolerance corner of the parts actually ordered. For example, with a 390 Ω resistor
+  the `led_indicator` LED draws a nominal 3.58 mA, inside its 2–4 mA spec. But a low-Vf LED with a −1 %
+  resistor draws 4.11 mA, so verification rejects it and asks for 470 Ω (the resistor must lie between
+  421 and 545 Ω).
 - **Stress and datasheet checks.** A divider that "works" while frying a 0603 resistor, or an LDO at
   130 °C junction, now fails verification. Part selection then has to honour the simulated stress.
 - **Planned tool calls and a restricted tool set.** This was the "what's next" item. Six typed tools with
@@ -218,7 +229,7 @@ container.
 ## Development
 
 ```bash
-pip install -e '.[test]' && pytest           # ~95 tests; KiCad/Freerouting/Pi tests skip if absent
+pip install -e '.[test]' && pytest           # ~100 tests; KiCad/Freerouting/Pi tests skip if absent
 npm install && npm run typecheck             # Pi extension against the real Pi type definitions
 pcbagent schema --write schemas              # after changing schemas or prompts (a test checks this)
 python scripts/make_sample_catalog.py        # regenerate the SAMPLE catalog

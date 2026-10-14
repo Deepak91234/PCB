@@ -1,0 +1,10 @@
+{
+  "name": "lipo_3v3",
+  "components": [
+    {"ref": "J1", "part": "jst_ph_1x02", "pins": {"1": "VBAT", "2": "GND"}, "note": "battery"},
+    {"ref": "J2", "part": "header_1x02", "pins": {"1": "V3V3", "2": "GND"}, "note": "3.3 V out"},
+    {"ref": "U1", "part": "XC6206P332MR", "pins": {"IN": "VBAT", "OUT": "V3V3", "GND": "GND"}},
+    {"ref": "C1", "part": "capacitor", "value": "1u", "pins": {"1": "VBAT", "2": "GND"}},
+    {"ref": "C2", "part": "capacitor", "value": "1u", "pins": {"1": "V3V3", "2": "GND"}}
+  ]
+}

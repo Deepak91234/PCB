@@ -1,0 +1,8 @@
+{
+  "name": "led_indicator",
+  "components": [
+    {"ref": "J1", "part": "header_1x02", "pins": {"1": "V3V3", "2": "GND"}},
+    {"ref": "R1", "part": "resistor", "value": "470", "pins": {"1": "V3V3", "2": "LED_A"}},
+    {"ref": "D1", "part": "led_red", "pins": {"A": "LED_A", "K": "GND"}}
+  ]
+}

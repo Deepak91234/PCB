@@ -1,0 +1,1 @@
+3.3 V supply from a single LiPo cell (3.7 to 4.2 V) for a 100 mA sensor node; sleep current under 10 uA.

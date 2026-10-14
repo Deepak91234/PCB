@@ -1,0 +1,4 @@
+{"constraints": [
+  {"type": "edge", "ref": "J1", "side": "left"},
+  {"type": "group", "refs": ["R1", "C1"], "max_mm": 4}
+]}

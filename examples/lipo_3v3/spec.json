@@ -1,0 +1,19 @@
+{
+  "title": "LiPo to 3.3 V low-quiescent regulator",
+  "summary": "Single-cell LiPo (3.7-4.2 V) to 3.3 V at up to 100 mA with microamp sleep current.",
+  "ports": [
+    {"net": "VBAT", "role": "power_in", "description": "LiPo cell via JST PH"},
+    {"net": "V3V3", "role": "power_out"},
+    {"net": "GND", "role": "ground"}
+  ],
+  "conditions": [
+    {"id": "full_battery", "sources": [{"net": "VBAT", "volts": 4.2}], "loads": [{"net": "V3V3", "amps": 0.1}]},
+    {"id": "low_battery", "sources": [{"net": "VBAT", "volts": 3.7}], "loads": [{"net": "V3V3", "amps": 0.1}]},
+    {"id": "sleep", "sources": [{"net": "VBAT", "volts": 4.2}]}
+  ],
+  "requirements": [
+    {"id": "vout_full", "condition": "full_battery", "measure": {"type": "voltage", "net": "V3V3"}, "target": 3.3, "tolerance": {"pct": 3}},
+    {"id": "vout_low_battery", "condition": "low_battery", "measure": {"type": "voltage", "net": "V3V3"}, "target": 3.3, "tolerance": {"pct": 3}},
+    {"id": "sleep_current", "condition": "sleep", "measure": {"type": "source_current", "net": "VBAT"}, "max": 0.00001}
+  ]
+}
