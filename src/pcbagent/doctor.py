@@ -105,6 +105,10 @@ def run_checks() -> dict:
         ok = val is not None and val.lower() in ((want,) if want == "1" else ("0", "false", "no"))
         privacy.append(f"  {'ok  ' if ok else 'WARN'} {var}={val or '(unset)'}  (set {var}={want} before starting pi)")
     privacy.append("  ok   Freerouting runs with analytics off, a private settings dir and a network jail")
+    ctx = os.environ.get("OLLAMA_CONTEXT_LENGTH")
+    privacy.append(f"  {'ok  ' if ctx and int(ctx) >= 32768 else 'NOTE'} OLLAMA_CONTEXT_LENGTH={ctx or '(unset)'}: "
+                   "Ollama truncates silently past its context; run `OLLAMA_CONTEXT_LENGTH=32768 ollama serve` "
+                   "for Pi (`pcbagent run` sets num_ctx itself)")
     privacy.append("  ok   the only network call in pcbagent is `pcbagent catalog update` (public parts list)")
     return {"ready": ready, "checks": checks, "privacy": privacy}
 

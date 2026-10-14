@@ -56,15 +56,59 @@ class Agent:
         self.max_layout = max_layout
         self.log = log
         self.messages: list[dict] = []
+        self.num_ctx = int(os.environ.get("PCBAGENT_NUM_CTX", "32768"))
+        self.api = self.detect_api()
 
     # --- model --------------------------------------------------------------
-    def chat(self) -> dict:
-        body = {"model": self.model, "messages": self.messages, "stream": False, "temperature": 0.2,
-                "tools": [{"type": "function", "function": t} for t in TOOLS]}
-        req = urllib.request.Request(f"{self.host}/v1/chat/completions", data=json.dumps(body).encode(),
+    def _post(self, path: str, body: dict) -> dict:
+        req = urllib.request.Request(f"{self.host}{path}", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json", "Authorization": "Bearer ollama"})
         with urllib.request.urlopen(req, timeout=float(os.environ.get("PCBAGENT_MODEL_TIMEOUT", "900"))) as resp:
-            data = json.load(resp)
+            return json.load(resp)
+
+    def detect_api(self) -> str:
+        """Ollama's native API lets us set the context window per request; prefer it when present.
+
+        Ollama's default context is small and it truncates silently, which would cut the
+        instructions and tool schemas out of a long design session.
+        """
+        forced = os.environ.get("PCBAGENT_MODEL_API")
+        if forced in ("ollama", "openai"):
+            return forced
+        try:
+            with urllib.request.urlopen(f"{self.host}/api/version", timeout=3) as resp:
+                if "version" in json.load(resp):
+                    return "ollama"
+        except (OSError, ValueError):
+            pass
+        return "openai"
+
+    def chat(self) -> dict:
+        tools = [{"type": "function", "function": t} for t in TOOLS]
+        if self.api == "ollama":
+            msgs = []
+            for m in self.messages:
+                m = dict(m)
+                if m.get("tool_calls"):
+                    m["tool_calls"] = [{"function": {"name": c["function"]["name"],
+                                                     "arguments": _as_obj(c["function"].get("arguments"))}}
+                                       for c in m["tool_calls"]]
+                if m["role"] == "tool":
+                    m = {"role": "tool", "content": m["content"], "tool_name": m.get("name")}
+                msgs.append(m)
+            data = self._post("/api/chat", {"model": self.model, "messages": msgs, "tools": tools, "stream": False,
+                                            "options": {"num_ctx": self.num_ctx, "temperature": 0.2}})
+            msg = data["message"]
+            calls = []
+            for i, c in enumerate(msg.get("tool_calls") or []):
+                fn = c["function"]
+                args = fn.get("arguments")
+                calls.append({"id": f"call_{len(self.messages)}_{i}", "type": "function",
+                              "function": {"name": fn["name"],
+                                           "arguments": args if isinstance(args, str) else json.dumps(args)}})
+            return {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
+        data = self._post("/v1/chat/completions", {"model": self.model, "messages": self.messages, "stream": False,
+                                                   "temperature": 0.2, "tools": tools})
         return data["choices"][0]["message"]
 
     # --- tools --------------------------------------------------------------
@@ -169,6 +213,15 @@ class Agent:
         return {"ok": False, "reason": f"turn limit {max_turns} reached", "turns": max_turns}
 
 
+def _as_obj(args):
+    if isinstance(args, str):
+        try:
+            return json.loads(args)
+        except json.JSONDecodeError:
+            return {}
+    return args or {}
+
+
 def _search(args: dict) -> str:
     from ..catalog import db
     from ..catalog.parse import unit_price
@@ -213,8 +266,9 @@ def main(args) -> int:
             n += 1
         root = root.parent / f"{root.name}_{n}"
     project = Project.create(root, args.request)
-    print(f"design: {project.root}\nmodel: {args.model} at {host}")
     agent = Agent(project, host, args.model, include_layout=not args.no_layout, max_circuit=args.max_attempts)
+    ctx = f", context {agent.num_ctx} tokens" if agent.api == "ollama" else ""
+    print(f"design: {project.root}\nmodel: {args.model} at {host} ({agent.api} API{ctx})")
     try:
         result = agent.run(args.request)
     except OSError as exc:

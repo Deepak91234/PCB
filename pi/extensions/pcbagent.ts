@@ -258,12 +258,14 @@ export default async function pcbagent(pi: ExtensionAPI) {
 			? process.env.OLLAMA_HOST
 			: `http://${process.env.OLLAMA_HOST}`
 		: "http://127.0.0.1:11434";
+	let registeredOllama = false;
 	if (process.env.PCBAGENT_REGISTER_OLLAMA !== "0") {
 		if (!isLocal(host) && process.env.PCBAGENT_ALLOW_REMOTE_MODEL !== "1") {
 			// A remote model endpoint would ship the design off this machine.
 		} else {
 			const models = await ollamaModels(host);
 			if (models.length) {
+				registeredOllama = true;
 				pi.registerProvider("ollama", {
 					name: "Ollama (local)",
 					baseUrl: `${host.replace(/\/$/, "")}/v1`,
@@ -476,6 +478,12 @@ export default async function pcbagent(pi: ExtensionAPI) {
 			if (entry.type === "custom" && entry.customType === "pcbagent-run" && entry.data?.dir) {
 				state.dir = entry.data.dir;
 			}
+		}
+		if (registeredOllama && !process.env.OLLAMA_CONTEXT_LENGTH && ctx.hasUI) {
+			ctx.ui.notify(
+				"PCBAgent: start Ollama with OLLAMA_CONTEXT_LENGTH=32768. Its default context is small and it truncates silently, which drops instructions from long design sessions.",
+				"info",
+			);
 		}
 		const missing = ["PI_OFFLINE", "PI_TELEMETRY", "PI_SKIP_VERSION_CHECK"].filter((v) => !process.env[v]);
 		if (missing.length && ctx.hasUI) {

@@ -32,7 +32,8 @@ def _free_port() -> int:
 def fake_model(tmp_path, request):
     port = _free_port()
     log = tmp_path / "model.log"
-    env = {**os.environ, "FAKE_MODEL_SLOPPY": "1" if request.param == "sloppy" else "0"}
+    env = {**os.environ, "FAKE_MODEL_SLOPPY": "1" if request.param == "sloppy" else "0",
+           "FAKE_MODEL_NATIVE": "1" if request.param == "native" else "0"}
     proc = subprocess.Popen([sys.executable, str(SERVER), str(port), str(log)], env=env)
     for _ in range(50):
         try:
@@ -96,6 +97,21 @@ def test_standalone_loop_unwraps_sloppy_arguments(tmp_path, fake_model):
     result = Agent(p, host, "fake-nemotron", include_layout=False, log=lambda *_: None).run("divider")
     assert result["ok"], result
     assert p.state()["circuit_attempts"] == 2  # the stringified circuit was simulated, not rejected
+
+
+@needs_ngspice
+@pytest.mark.parametrize("fake_model", ["native"], indirect=True)
+def test_standalone_loop_uses_ollama_native_api_with_big_context(tmp_path, fake_model, monkeypatch):
+    from pcbagent.agent.loop import Agent
+    from pcbagent.project import Project
+    host, log = fake_model
+    monkeypatch.setenv("PCBAGENT_NUM_CTX", "24576")
+    p = Project.create(tmp_path / "d", "divider")
+    agent = Agent(p, host, "fake-nemotron", include_layout=False, log=lambda *_: None)
+    assert agent.api == "ollama"
+    assert agent.run("divider")["ok"]
+    reqs = [json.loads(line) for line in log.read_text().splitlines()]
+    assert all(r["path"] == "/api/chat" and r["options"]["num_ctx"] == 24576 for r in reqs)
 
 
 @needs_layout

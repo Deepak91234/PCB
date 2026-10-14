@@ -31,6 +31,8 @@ CONSTRAINTS = json.loads((ROOT / "examples" / "divider" / "constraints.json").re
 LOG = None
 # FAKE_MODEL_SLOPPY=1: send arguments the way small models often do (wrapped object, JSON string).
 SLOPPY = __import__("os").environ.get("FAKE_MODEL_SLOPPY") == "1"
+# FAKE_MODEL_NATIVE=1: also serve Ollama's native /api/version and /api/chat.
+NATIVE = __import__("os").environ.get("FAKE_MODEL_NATIVE") == "1"
 
 
 def decide(messages):
@@ -79,6 +81,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path.startswith("/api/tags"):
             self._json({"models": [{"name": "fake-nemotron", "model": "fake-nemotron"}]})
+        elif self.path.startswith("/api/version") and NATIVE:
+            self._json({"version": "0.0.0-fake"})
         elif self.path.startswith("/v1/models"):
             self._json({"object": "list", "data": [{"id": "fake-nemotron", "object": "model"}]})
         else:
@@ -100,7 +104,14 @@ class Handler(BaseHTTPRequestHandler):
         kind, a, b = decide(messages)
         tools = [t["function"]["name"] for t in req.get("tools", [])]
         with open(LOG, "a") as fh:
-            fh.write(json.dumps({"n_messages": len(messages), "tools": tools, "action": [kind, a]}) + "\n")
+            fh.write(json.dumps({"n_messages": len(messages), "tools": tools, "action": [kind, a],
+                                 "path": self.path, "options": req.get("options")}) + "\n")
+        if self.path.startswith("/api/chat"):
+            msg = {"role": "assistant", "content": a if kind == "text" else ""}
+            if kind == "tool":
+                msg["tool_calls"] = [{"function": {"name": a, "arguments": b}}]
+            self._json({"model": "fake-nemotron", "message": msg, "done": True})
+            return
         if not req.get("stream", False):
             msg = {"role": "assistant", "content": a if kind == "text" else None}
             if kind == "tool":

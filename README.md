@@ -107,9 +107,16 @@ to a clearly labelled **SAMPLE** catalog of fake part numbers so the demo still 
 ### 3. Design with Pi (recommended)
 
 ```bash
-pi install ./                       # from this checkout (or: pi install git:<repo url>)
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve   # see the note below
+pi install ./                              # from this checkout (or: pi install git:<repo url>)
 PI_OFFLINE=1 PI_TELEMETRY=0 PI_SKIP_VERSION_CHECK=1 pi
 ```
+
+> **Context length matters.** The tool schemas alone are about 2.3k tokens, and a design session with a
+> few revisions reaches 10–20k. Ollama's default context window is smaller than that, and Ollama drops the
+> overflow *silently*, so the model loses its instructions mid-run. Start Ollama with
+> `OLLAMA_CONTEXT_LENGTH=32768` (or set `num_ctx` in a Modelfile). `pcbagent run` uses Ollama's native API
+> and sets `num_ctx` itself (`PCBAGENT_NUM_CTX`, default 32768).
 
 In Pi, pick your local model with `/model` (the extension registers your local Ollama models), then:
 
@@ -211,7 +218,7 @@ container.
 ## Development
 
 ```bash
-pip install -e '.[test]' && pytest           # 86 tests; KiCad/Freerouting/Pi tests skip if absent
+pip install -e '.[test]' && pytest           # ~95 tests; KiCad/Freerouting/Pi tests skip if absent
 npm install && npm run typecheck             # Pi extension against the real Pi type definitions
 pcbagent schema --write schemas              # after changing schemas or prompts (a test checks this)
 python scripts/make_sample_catalog.py        # regenerate the SAMPLE catalog
