@@ -28,11 +28,12 @@ def _free_port() -> int:
         return s.getsockname()[1]
 
 
-@pytest.fixture
-def fake_model(tmp_path):
+@pytest.fixture(params=["clean"])
+def fake_model(tmp_path, request):
     port = _free_port()
     log = tmp_path / "model.log"
-    proc = subprocess.Popen([sys.executable, str(SERVER), str(port), str(log)])
+    env = {**os.environ, "FAKE_MODEL_SLOPPY": "1" if request.param == "sloppy" else "0"}
+    proc = subprocess.Popen([sys.executable, str(SERVER), str(port), str(log)], env=env)
     for _ in range(50):
         try:
             socket.create_connection(("127.0.0.1", port), timeout=0.2).close()
@@ -85,8 +86,21 @@ def test_loop_refuses_remote_model(tmp_path, monkeypatch):
 PI = ROOT / "node_modules" / ".bin" / "pi"
 
 
+@needs_ngspice
+@pytest.mark.parametrize("fake_model", ["sloppy"], indirect=True)
+def test_standalone_loop_unwraps_sloppy_arguments(tmp_path, fake_model):
+    from pcbagent.agent.loop import Agent
+    from pcbagent.project import Project
+    host, log = fake_model
+    p = Project.create(tmp_path / "d", "divider")
+    result = Agent(p, host, "fake-nemotron", include_layout=False, log=lambda *_: None).run("divider")
+    assert result["ok"], result
+    assert p.state()["circuit_attempts"] == 2  # the stringified circuit was simulated, not rejected
+
+
 @needs_layout
 @pytest.mark.skipif(not PI.exists(), reason="Pi not installed (npm install)")
+@pytest.mark.parametrize("fake_model", ["clean", "sloppy"], indirect=True)
 def test_pi_extension_end_to_end(tmp_path, fake_model, sample_catalog):
     host, log = fake_model
     env = {**os.environ, "OLLAMA_HOST": host, "PI_OFFLINE": "1", "PI_TELEMETRY": "0",

@@ -40,7 +40,12 @@ def run_demo(args) -> int:
     src = example_dir(args.example)
     root = Path(args.dir or f"designs/demo_{args.example}")
     if root.exists():
-        shutil.rmtree(root)
+        # Only ever replace a previous design, never an arbitrary directory.
+        if (root / "pcbagent.json").exists():
+            shutil.rmtree(root)
+        elif any(root.iterdir()):
+            print(f"{root} exists and is not a PCBAgent design; choose another --dir", file=sys.stderr)
+            return 2
     if not db.default_path().exists():
         print("no parts catalog installed; using the bundled SAMPLE catalog (fake part numbers).\n"
               "Run `pcbagent catalog update` for real JLCPCB data.\n", file=sys.stderr)

@@ -81,13 +81,23 @@ def footprint_exists(fpid: str) -> bool:
         return False
 
 
+_SUBUNIT = re.compile(r"_\d+_\d+$")
+
+
 @lru_cache(maxsize=64)
 def _symbol_index(lib_file: str) -> dict[str, str | None]:
-    """symbol name -> name it extends (or None)."""
+    """symbol name -> name it extends (or None).
+
+    Indentation differs between KiCad versions (spaces in 7, tabs in 8+), so
+    top-level symbols are told apart from unit sub-symbols by KiCad's
+    ``<name>_<unit>_<style>`` naming of the latter, not by indentation.
+    """
     text = Path(lib_file).read_text(errors="replace")
     out: dict[str, str | None] = {}
-    for m in re.finditer(r'^\s{2}\(symbol "([^"]+)"', text, re.M):
+    for m in re.finditer(r'\(symbol "([^"]+)"', text):
         name = m.group(1)
+        if _SUBUNIT.search(name) or ":" in name:
+            continue
         tail = text[m.end(): m.end() + 400]
         ext = re.match(r'\s*\(extends "([^"]+)"\)', tail)
         out[name] = ext.group(1) if ext else None

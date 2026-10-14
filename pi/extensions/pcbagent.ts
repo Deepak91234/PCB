@@ -15,7 +15,7 @@
 
 import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -53,9 +53,10 @@ function pythonCommand(): { cmd: string; args: string[]; env: NodeJS.ProcessEnv 
 		return { cmd: parts[0], args: parts.slice(1), env };
 	}
 	if (existsSync(join(SRC_DIR, "pcbagent", "__init__.py"))) {
-		env.PYTHONPATH = env.PYTHONPATH ? `${SRC_DIR}:${env.PYTHONPATH}` : SRC_DIR;
+		env.PYTHONPATH = env.PYTHONPATH ? `${SRC_DIR}${delimiter}${env.PYTHONPATH}` : SRC_DIR;
 	}
-	return { cmd: process.env.PCBAGENT_PYTHON || "python3", args: ["-m", "pcbagent"], env };
+	const python = process.env.PCBAGENT_PYTHON || (process.platform === "win32" ? "python" : "python3");
+	return { cmd: python, args: ["-m", "pcbagent"], env };
 }
 
 function runCli(args: string[], input?: unknown, signal?: AbortSignal, cwd?: string): Promise<CliResult> {
@@ -109,6 +110,33 @@ const state: RunState = {
 	idleNudges: 0,
 	toolCallsThisRun: 0,
 };
+
+/**
+ * Small local models often wrap the payload ({"spec": {...}}) or send it as a JSON string.
+ * Unwrap those before schema validation instead of spending a retry on them.
+ */
+function unwrapArgs(args: unknown, key: string): any {
+	const parse = (x: any) => {
+		if (typeof x !== "string") return x;
+		try {
+			return JSON.parse(x);
+		} catch {
+			return x;
+		}
+	};
+	const isObject = (x: any) => x !== null && typeof x === "object" && !Array.isArray(x);
+	let a: any = parse(args);
+	for (let i = 0; i < 2; i++) {
+		if (!isObject(a)) break;
+		const keys = Object.keys(a);
+		if (keys.length !== 1 || ![key, "input", "arguments"].includes(keys[0])) break;
+		const inner = parse(a[keys[0]]);
+		// {"constraints": [...]} is the real payload, not a wrapper: only unwrap objects.
+		if (!isObject(inner)) break;
+		a = inner;
+	}
+	return a;
+}
 
 /** pi.sendUserMessage starts the run asynchronously: wait until it is busy, then until it is idle. */
 async function waitForRun(ctx: { isIdle(): boolean; waitForIdle(): Promise<void> }): Promise<void> {
@@ -305,6 +333,7 @@ export default async function pcbagent(pi: ExtensionAPI) {
 			"Write the circuit specification and lock it. Ports: every external net and GND (role ground). Conditions: test benches with ideal sources ({net, volts} or {net, amps}) and loads ({net, ohms} or {net, amps}) on port nets. Requirements: {id, condition, measure, target+tolerance or min/max}. Measure types: voltage{net}, source_current{net}, source_power{net}, load_power{net}, efficiency, component_current{ref,pin}, component_power{ref}, voltage_change{net,from_condition}, gain_db{input,output,hz}, cutoff_hz{input,output}. Can only be called once per design.",
 		promptSnippet: "Write and lock the PCB specification",
 		parameters: Type.Unsafe<any>(specSchema),
+		prepareArguments: (args) => unwrapArgs(args, "spec"),
 		constrainedSampling: strict,
 		executionMode: "sequential",
 		async execute(_id, params, signal) {
@@ -322,6 +351,7 @@ export default async function pcbagent(pi: ExtensionAPI) {
 			"Submit the complete circuit: components [{ref, part, value?, package?, pins: {pin: NET}}]. Parts come from pcb_models. The tool validates wiring, simulates every spec condition in ngspice across tolerance corners, checks ratings and datasheet rules, then sources each part from the local JLCPCB catalog. Returns pass/fail per requirement with measured values. Resubmit the whole circuit after each fix.",
 		promptSnippet: "Submit a circuit for simulation, verification and sourcing",
 		parameters: Type.Unsafe<any>(circuitSchema),
+		prepareArguments: (args) => unwrapArgs(args, "circuit"),
 		constrainedSampling: strict,
 		executionMode: "sequential",
 		async execute(_id, params, signal, onUpdate) {
@@ -342,6 +372,7 @@ export default async function pcbagent(pi: ExtensionAPI) {
 			"Lay out the verified design. Give placement constraints, never coordinates: near{ref,to,pin?,max_mm}, edge{ref,side}, group{refs,max_mm}, flow{refs,axis}, align{refs,axis}, apart{ref,to,min_mm}; optional board{max_width_mm,max_height_mm}. A placer positions parts, Freerouting routes, KiCad DRC scores the board.",
 		promptSnippet: "Place and route the board from placement constraints",
 		parameters: Type.Unsafe<any>(constraintsSchema),
+		prepareArguments: (args) => unwrapArgs(args, "constraints"),
 		constrainedSampling: strict,
 		executionMode: "sequential",
 		async execute(_id, params, signal, onUpdate) {

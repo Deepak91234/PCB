@@ -75,7 +75,11 @@ class Agent:
         from ..layout.constraints import ConstraintError
         from ..project import ProjectError
         from ..spec import SpecError
+        from ..cli import unwrap
         p = self.project
+        key = {"pcb_spec": "spec", "pcb_circuit": "circuit", "pcb_layout": "constraints"}.get(name)
+        if key:
+            args = unwrap(args, key)
         try:
             if name == "pcb_models":
                 kind = args.get("kind")

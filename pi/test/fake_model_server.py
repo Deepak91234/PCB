@@ -29,6 +29,8 @@ for c in BAD["components"]:
         c["value"] = "10k"
 CONSTRAINTS = json.loads((ROOT / "examples" / "divider" / "constraints.json").read_text())
 LOG = None
+# FAKE_MODEL_SLOPPY=1: send arguments the way small models often do (wrapped object, JSON string).
+SLOPPY = __import__("os").environ.get("FAKE_MODEL_SLOPPY") == "1"
 
 
 def decide(messages):
@@ -43,9 +45,9 @@ def decide(messages):
     if "pcb_models" not in calls:
         return ("tool", "pcb_models", {})
     if "pcb_spec" not in calls:
-        return ("tool", "pcb_spec", SPEC)
+        return ("tool", "pcb_spec", {"spec": SPEC} if SLOPPY else SPEC)
     if n_circuit == 0:
-        return ("tool", "pcb_circuit", BAD)
+        return ("tool", "pcb_circuit", {"circuit": json.dumps(BAD)} if SLOPPY else BAD)
     if n_circuit == 1:
         if nudged:
             return ("tool", "pcb_circuit", GOOD)

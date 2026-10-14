@@ -19,7 +19,28 @@ from . import models as models_mod
 from . import schemas
 
 
-def _read_input(args) -> dict:
+def unwrap(data, key: str):
+    """Accept {"spec": {...}}, {"input": {...}} or a JSON string, as small models often send them."""
+    def parse(x):
+        if isinstance(x, str):
+            try:
+                return json.loads(x)
+            except json.JSONDecodeError:
+                return x
+        return x
+
+    data = parse(data)
+    for _ in range(2):
+        if isinstance(data, dict) and len(data) == 1 and next(iter(data)) in (key, "input", "arguments"):
+            inner = parse(next(iter(data.values())))
+            if isinstance(inner, dict):  # {"constraints": [...]} is the real payload, not a wrapper
+                data = inner
+                continue
+        break
+    return data
+
+
+def _read_input(args, key: str | None = None) -> dict:
     if getattr(args, "file", None) and args.file != "-":
         text = Path(args.file).read_text()
     else:
@@ -28,7 +49,7 @@ def _read_input(args) -> dict:
         data = json.loads(text)
     except json.JSONDecodeError as exc:
         raise SystemExit(_emit(args, {"ok": False, "error": f"input is not valid JSON: {exc}"}, 2))
-    return data
+    return unwrap(data, key) if key else data
 
 
 def _emit(args, data: dict, code: int = 0, text: str | None = None) -> int:
@@ -67,7 +88,7 @@ def cmd_spec(args) -> int:
     from .project import ProjectError
     from .spec import SpecError
     p = _project(args)
-    raw = _read_input(args)
+    raw = _read_input(args, "spec")
     try:
         spec = p.write_spec(raw)
     except SpecError as exc:
@@ -95,7 +116,7 @@ def cmd_spec_unlock(args) -> int:
 def cmd_circuit(args) -> int:
     from .project import ProjectError
     p = _project(args)
-    raw = _read_input(args)
+    raw = _read_input(args, "circuit")
     try:
         result = p.submit_circuit(raw)
     except ProjectError as exc:
@@ -111,7 +132,7 @@ def cmd_layout(args) -> int:
     from .project import ProjectError
     p = _project(args)
     if args.file or not sys.stdin.isatty():
-        raw = _read_input(args)
+        raw = _read_input(args, "constraints")
     else:
         saved = p.path("layout", "constraints.json")
         raw = json.loads(saved.read_text()) if saved.exists() else {"constraints": []}

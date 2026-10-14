@@ -89,3 +89,34 @@ def test_schema_exports_are_current():
         on_disk = json.loads((root / f"{name}.schema.json").read_text())
         assert on_disk == schemas.tool_schema(name), f"run `pcbagent schema --write schemas` ({name})"
     assert json.loads((root / "prompts.json").read_text()) == prompts.export()
+
+
+def test_unwrap_sloppy_arguments():
+    from pcbagent.cli import unwrap
+    spec = {"title": "x", "ports": []}
+    assert unwrap({"spec": spec}, "spec") == spec
+    assert unwrap('{"spec": {"title": "x", "ports": []}}', "spec") == spec
+    assert unwrap({"input": json_dumps(spec)}, "spec") == spec
+    assert unwrap(spec, "spec") == spec
+    assert unwrap({"spec": spec, "extra": 1}, "spec") == {"spec": spec, "extra": 1}
+    layout = {"constraints": [{"type": "edge", "ref": "J1"}]}
+    assert unwrap(layout, "constraints") == layout
+    assert unwrap({"constraints": layout}, "constraints") == layout
+
+
+def json_dumps(x):
+    import json
+    return json.dumps(x)
+
+
+@needs_kicad
+def test_symbol_index_handles_tab_indented_libraries(tmp_path):
+    """KiCad 8+ writes libraries with tabs; KiCad 7 with spaces. Both must index identically."""
+    import re
+    from pcbagent.kicad import libs
+    src = (libs.symbol_dir() / "Regulator_Linear.kicad_sym")
+    tabbed = tmp_path / "Regulator_Linear.kicad_sym"
+    tabbed.write_text(re.sub(r"^( +)", lambda m: "\t" * (len(m.group(1)) // 2), src.read_text(), flags=re.M))
+    a = libs._symbol_index(str(src))
+    b = libs._symbol_index(str(tabbed))
+    assert a == b and a["AMS1117-3.3"] == "AP1117-15" and not any(k.endswith("_1_1") for k in a)

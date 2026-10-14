@@ -81,3 +81,12 @@ def test_editing_circuit_after_verification_is_caught(tmp_path):
     p.path("circuit.json").write_text(json.dumps(raw))
     with pytest.raises(ProjectError, match="has not passed verification"):
         p.require_verified()
+
+
+def test_demo_refuses_to_delete_foreign_directory(tmp_path):
+    from pcbagent.cli import main
+    victim = tmp_path / "work"
+    victim.mkdir()
+    (victim / "precious.txt").write_text("keep me")
+    assert main(["demo", "divider", "--dir", str(victim)]) == 2
+    assert (victim / "precious.txt").read_text() == "keep me"
