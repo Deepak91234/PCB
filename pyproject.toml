@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pcbagent"
+version = "0.1.0"
+description = "Local, verified PCB design: natural-language spec -> simulated circuit -> sourced parts -> routed KiCad board."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+# The core is deliberately stdlib-only: nothing to vet, installs on an air-gapped machine.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[project.scripts]
+pcbagent = "pcbagent.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+pcbagent = ["data/*.json", "data/*.csv", "data/*.md", "kicad/plugin/*.py", "kicad/plugin/*.png", "schemas/*.json"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+  "ngspice: needs the ngspice binary",
+  "kicad: needs KiCad (pcbnew python module and libraries)",
+  "freerouting: needs Java and the Freerouting jar",
+]

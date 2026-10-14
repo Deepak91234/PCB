@@ -1,0 +1,1 @@
+Scale a 0-5 V signal to 0-3.3 V for a 3.3 V microcontroller ADC input (1 MOhm).

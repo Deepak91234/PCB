@@ -1,0 +1,11 @@
+{
+  "constraints": [
+    {"type": "edge", "ref": "J1", "side": "left", "reason": "power in on the left"},
+    {"type": "edge", "ref": "J2", "side": "right", "reason": "power out on the right"},
+    {"type": "flow", "refs": ["J1", "U1", "J2"], "axis": "x", "reason": "input to output, left to right"},
+    {"type": "near", "ref": "C1", "to": "U1", "pin": "IN", "max_mm": 3},
+    {"type": "near", "ref": "C2", "to": "U1", "pin": "OUT", "max_mm": 3},
+    {"type": "near", "ref": "C3", "to": "U1", "pin": "OUT", "max_mm": 4},
+    {"type": "group", "refs": ["R1", "D1"], "max_mm": 5}
+  ]
+}

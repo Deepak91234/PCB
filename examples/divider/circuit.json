@@ -1,0 +1,8 @@
+{
+  "name": "divider_5v_3v3",
+  "components": [
+    {"ref": "J1", "part": "header_1x03", "pins": {"1": "VIN", "2": "GND", "3": "VOUT"}, "note": "VIN / GND / VOUT"},
+    {"ref": "R1", "part": "resistor", "value": "10k", "pins": {"1": "VIN", "2": "VOUT"}},
+    {"ref": "R2", "part": "resistor", "value": "19.6k", "pins": {"1": "VOUT", "2": "GND"}}
+  ]
+}

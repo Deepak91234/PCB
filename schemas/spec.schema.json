@@ -1,0 +1,299 @@
+{
+  "type": "object",
+  "title": "PCBAgent circuit specification",
+  "required": [
+    "title",
+    "ports",
+    "conditions",
+    "requirements"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {
+      "type": "string",
+      "enum": [
+        "pcbagent/spec@1"
+      ]
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 120
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "ground": {
+      "type": "string",
+      "pattern": "[A-Z][A-Z0-9_]{0,31}"
+    },
+    "ports": {
+      "type": "array",
+      "minItems": 2,
+      "description": "External connections of the board. Every port needs a connector or test point.",
+      "items": {
+        "type": "object",
+        "required": [
+          "net",
+          "role"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "net": {
+            "type": "string",
+            "pattern": "[A-Z][A-Z0-9_]{0,31}"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "power_in",
+              "power_out",
+              "signal_in",
+              "signal_out",
+              "bidirectional",
+              "ground"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300
+          }
+        }
+      }
+    },
+    "conditions": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Test benches: ideal sources and loads applied to port nets. They are not part of the board.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "sources"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "[a-z][a-z0-9_]{0,39}"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "sources": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "required": [
+                "net"
+              ],
+              "additionalProperties": false,
+              "description": "A test source: {\"net\": \"VIN\", \"volts\": 5} or {\"net\": \"IIN\", \"amps\": 0.01}",
+              "properties": {
+                "net": {
+                  "type": "string",
+                  "pattern": "[A-Z][A-Z0-9_]{0,31}"
+                },
+                "volts": {
+                  "type": "number"
+                },
+                "amps": {
+                  "type": "number"
+                },
+                "series_ohms": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "loads": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "net"
+              ],
+              "additionalProperties": false,
+              "description": "A test load to ground: {\"net\": \"VOUT\", \"ohms\": 100} or {\"net\": \"VOUT\", \"amps\": 0.5}",
+              "properties": {
+                "net": {
+                  "type": "string",
+                  "pattern": "[A-Z][A-Z0-9_]{0,31}"
+                },
+                "ohms": {
+                  "type": "number",
+                  "exclusiveMinimum": 0
+                },
+                "amps": {
+                  "type": "number",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "ambient_c": {
+            "type": "number",
+            "minimum": -55,
+            "maximum": 125
+          }
+        }
+      }
+    },
+    "requirements": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Acceptance checks. Each needs target+tolerance or min and/or max.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "condition",
+          "measure"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "[a-z][a-z0-9_]{0,39}"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 300
+          },
+          "condition": {
+            "type": "string",
+            "pattern": "[a-z][a-z0-9_]{0,39}"
+          },
+          "measure": {
+            "type": "object",
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "component_current",
+                  "component_power",
+                  "cutoff_hz",
+                  "efficiency",
+                  "gain_db",
+                  "load_power",
+                  "source_current",
+                  "source_power",
+                  "voltage",
+                  "voltage_change"
+                ]
+              },
+              "net": {
+                "type": "string",
+                "pattern": "[A-Z][A-Z0-9_]{0,31}"
+              },
+              "ref": {
+                "type": "string",
+                "pattern": "[A-Z]{1,3}[0-9]{1,3}"
+              },
+              "pin": {
+                "type": "string",
+                "minLength": 1
+              },
+              "from_condition": {
+                "type": "string",
+                "pattern": "[a-z][a-z0-9_]{0,39}"
+              },
+              "input": {
+                "type": "string",
+                "pattern": "[A-Z][A-Z0-9_]{0,31}"
+              },
+              "output": {
+                "type": "string",
+                "pattern": "[A-Z][A-Z0-9_]{0,31}"
+              },
+              "hz": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          },
+          "target": {
+            "type": "number"
+          },
+          "tolerance": {
+            "type": "object",
+            "additionalProperties": false,
+            "description": "{\"pct\": 2} for +/-2 % or {\"abs\": 0.05} for +/-0.05 units",
+            "properties": {
+              "pct": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "abs": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          },
+          "min": {
+            "type": "number"
+          },
+          "max": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "board": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_width_mm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "max_height_mm": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "layers": {
+          "type": "integer",
+          "enum": [
+            2
+          ]
+        }
+      }
+    },
+    "preferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "passive_package": {
+          "type": "string",
+          "enum": [
+            "0402",
+            "0603",
+            "0805",
+            "1206"
+          ]
+        },
+        "quantity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        },
+        "basic_parts_only": {
+          "type": "boolean"
+        },
+        "ambient_c": {
+          "type": "number",
+          "minimum": -55,
+          "maximum": 125
+        }
+      }
+    }
+  }
+}

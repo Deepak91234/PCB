@@ -1,0 +1,17 @@
+{
+  "title": "5 V to 3.3 V divider for an ADC input",
+  "summary": "Scale a 0-5 V signal to 0-3.3 V for a 3.3 V microcontroller ADC with a 1 MOhm input.",
+  "ground": "GND",
+  "ports": [
+    {"net": "VIN", "role": "signal_in", "description": "5 V signal"},
+    {"net": "VOUT", "role": "signal_out", "description": "to ADC pin"},
+    {"net": "GND", "role": "ground"}
+  ],
+  "conditions": [
+    {"id": "nominal", "description": "5 V in, ADC input load", "sources": [{"net": "VIN", "volts": 5.0}], "loads": [{"net": "VOUT", "ohms": 1000000}]}
+  ],
+  "requirements": [
+    {"id": "vout", "description": "output at full scale", "condition": "nominal", "measure": {"type": "voltage", "net": "VOUT"}, "target": 3.3, "tolerance": {"pct": 2}},
+    {"id": "input_current", "description": "light load on the 5 V source", "condition": "nominal", "measure": {"type": "source_current", "net": "VIN"}, "max": 0.001}
+  ]
+}

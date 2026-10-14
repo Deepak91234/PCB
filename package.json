@@ -1,0 +1,27 @@
+{
+  "name": "pcbagent",
+  "version": "0.1.0",
+  "description": "PCBAgent for Pi: natural-language spec to a simulated, sourced, routed KiCad board. Runs entirely on your machine.",
+  "license": "MIT",
+  "type": "module",
+  "keywords": ["pi-package", "pcb", "kicad", "ngspice", "eda", "jlcpcb", "local-llm"],
+  "pi": {
+    "extensions": ["./pi/extensions/pcbagent.ts"],
+    "skills": ["./pi/skills"]
+  },
+  "files": ["pi", "src", "schemas", "examples", "README.md"],
+  "scripts": {
+    "typecheck": "tsc -p pi/tsconfig.json --noEmit",
+    "test:pi": "node --test pi/test/"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-coding-agent": "1.2.0",
+    "@types/node": "^22.0.0",
+    "typebox": "^1.1.24",
+    "typescript": "^5.6.0"
+  }
+}

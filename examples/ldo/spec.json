@@ -1,0 +1,22 @@
+{
+  "title": "5 V to 3.3 V, 500 mA LDO regulator",
+  "summary": "Regulate a 5 V USB rail down to 3.3 V for up to 500 mA, with a power LED.",
+  "ground": "GND",
+  "ports": [
+    {"net": "VIN", "role": "power_in", "description": "5 V input"},
+    {"net": "VOUT", "role": "power_out", "description": "3.3 V output"},
+    {"net": "GND", "role": "ground"}
+  ],
+  "conditions": [
+    {"id": "no_load", "sources": [{"net": "VIN", "volts": 5.0}]},
+    {"id": "full_load", "sources": [{"net": "VIN", "volts": 5.0}], "loads": [{"net": "VOUT", "amps": 0.5}]},
+    {"id": "low_input", "description": "USB at its 4.75 V lower limit, full load", "sources": [{"net": "VIN", "volts": 4.75}], "loads": [{"net": "VOUT", "amps": 0.5}]}
+  ],
+  "requirements": [
+    {"id": "vout_no_load", "condition": "no_load", "measure": {"type": "voltage", "net": "VOUT"}, "target": 3.3, "tolerance": {"pct": 3}},
+    {"id": "vout_full_load", "condition": "full_load", "measure": {"type": "voltage", "net": "VOUT"}, "target": 3.3, "tolerance": {"pct": 3}},
+    {"id": "vout_low_input", "condition": "low_input", "measure": {"type": "voltage", "net": "VOUT"}, "target": 3.3, "tolerance": {"pct": 3}},
+    {"id": "load_regulation", "condition": "full_load", "measure": {"type": "voltage_change", "net": "VOUT", "from_condition": "no_load"}, "min": -0.05, "max": 0.05},
+    {"id": "idle_current", "condition": "no_load", "measure": {"type": "source_current", "net": "VIN"}, "max": 0.02}
+  ]
+}

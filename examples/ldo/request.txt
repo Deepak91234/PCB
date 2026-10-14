@@ -1,0 +1,1 @@
+Convert a 5 V USB supply to 3.3 V for up to 500 mA, with a power-on LED.

@@ -1,0 +1,7 @@
+{
+  "constraints": [
+    {"type": "edge", "ref": "J1", "side": "left", "reason": "signal in/out header on the left edge"},
+    {"type": "group", "refs": ["R1", "R2"], "max_mm": 4, "reason": "keep the divider compact"},
+    {"type": "near", "ref": "R2", "to": "J1", "max_mm": 6}
+  ]
+}
