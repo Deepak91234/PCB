@@ -468,9 +468,11 @@ def _ratings(spec, circuit, conds, op_runs, ground) -> tuple[list[dict], dict]:
         if k in ("npn", "nmos", "ldo") and (ref, "tj") in worst and "tj_max" in r:
             w = worst[(ref, "tj")]
             lim = r["tj_max"] - DERATE["tj_margin_c"]
+            amb = _ambient(spec, conds[w[1]])
+            watts = (w[0] - amb) / r["theta_ja"] if r.get("theta_ja") else 0.0
             add(ref, "junction_temperature", w[0], lim, "C", w[0] <= lim,
-                f"{ref} junction reaches {w[0]:.0f} C (limit {lim:.0f} C at theta_JA "
-                f"{r.get('theta_ja')} C/W)", w)
+                f"{ref} dissipates {format_value(watts, 'W')} in condition {w[1]}: junction reaches "
+                f"{w[0]:.0f} C (limit {lim:.0f} C at theta_JA {r.get('theta_ja')} C/W, ambient {amb:g} C)", w)
         if k == "ldo":
             if (ref, "vin") in worst:
                 w = worst[(ref, "vin")]

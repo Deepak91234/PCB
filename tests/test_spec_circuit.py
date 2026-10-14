@@ -93,3 +93,27 @@ def test_spec_ref_must_exist(ldo_spec):
     with pytest.raises(circuit_mod.CircuitError) as exc:
         circuit_mod.load(_ldo(), spec)
     assert any("has no D7" in e for e in exc.value.errors)
+
+
+def test_pin_aliases_and_part_suggestions(ldo_spec):
+    raw = _ldo()
+    raw["components"][2]["pins"] = {"VIN": "VIN", "VOUT": "VOUT", "GND": "GND"}
+    raw["components"][7]["pins"] = {"anode": "LED_A", "cathode": "GND"}
+    c = circuit_mod.load(raw, ldo_spec)
+    assert c.by_ref("U1").pins == {"IN": "VIN", "OUT": "VOUT", "GND": "GND"}
+    assert c.by_ref("D1").pins == {"A": "LED_A", "K": "GND"}
+    assert c.raw["components"][2]["pins"] == {"IN": "VIN", "OUT": "VOUT", "GND": "GND"}
+    assert any("read as 'IN'" in w for w in c.warnings)
+    raw["components"][2]["part"] = "AMS1117"
+    with pytest.raises(circuit_mod.CircuitError) as exc:
+        circuit_mod.load(raw, ldo_spec)
+    assert "Did you mean" in exc.value.errors[0] and "AMS1117-3.3" in exc.value.errors[0]
+
+
+def test_ambiguous_alias_is_not_guessed(ldo_spec):
+    raw = _ldo()
+    # "+" on a capacitor is not mapped (only diodes/LEDs have a meaningful polarity alias)
+    raw["components"][3]["pins"] = {"+": "VIN", "-": "GND"}
+    with pytest.raises(circuit_mod.CircuitError) as exc:
+        circuit_mod.load(raw, ldo_spec)
+    assert any("has no pin '+'" in e for e in exc.value.errors)

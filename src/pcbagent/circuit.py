@@ -8,6 +8,7 @@ message point at the exact component and pin to fix.
 from __future__ import annotations
 
 import copy
+import difflib
 from collections import defaultdict
 from dataclasses import dataclass, field
 
@@ -22,6 +23,41 @@ class CircuitError(ValueError):
         super().__init__("; ".join(errors))
         self.errors = errors
         self.warnings = warnings or []
+
+
+# Unambiguous names small models use for pins. Applied only when the given name is not a
+# real pin, maps to an unused real pin, and is reported back as a note.
+PIN_ALIASES = {
+    "led": {"anode": "A", "cathode": "K", "+": "A", "-": "K", "a": "A", "k": "K"},
+    "diode": {"anode": "A", "cathode": "K", "+": "A", "-": "K", "a": "A", "k": "K"},
+    "npn": {"base": "B", "emitter": "E", "collector": "C", "b": "B", "e": "E", "c": "C"},
+    "nmos": {"gate": "G", "source": "S", "drain": "D", "g": "G", "s": "S", "d": "D"},
+    "ldo": {"VIN": "IN", "VI": "IN", "INPUT": "IN", "VOUT": "OUT", "VO": "OUT", "OUTPUT": "OUT",
+            "VSS": "GND", "GROUND": "GND", "ENABLE": "EN", "CE": "EN"},
+    "_two_terminal": {"a": "1", "b": "2", "p1": "1", "p2": "2", "pin1": "1", "pin2": "2", "1": "1", "2": "2"},
+}
+
+
+def _alias_pins(rc_pins: dict, model: dict) -> tuple[dict, list[str]]:
+    real = model["pins"]
+    table = dict(PIN_ALIASES.get(model["kind"], {}))
+    if list(real) == ["1", "2"]:
+        table.update(PIN_ALIASES["_two_terminal"])
+    if model["kind"] == "connector":
+        table.update({f"pin{n}": n for n in real} | {f"p{n}": n for n in real})
+    out: dict[str, str] = {}
+    notes: list[str] = []
+    for pin, net in rc_pins.items():
+        if pin in real:
+            out[pin] = net
+            continue
+        target = table.get(pin) or table.get(pin.upper()) or table.get(pin.lower())
+        if target and target in real and target not in rc_pins and target not in out:
+            out[target] = net
+            notes.append(f"pin '{pin}' read as '{target}'")
+        else:
+            out[pin] = net
+    return out, notes
 
 
 @dataclass
@@ -94,6 +130,7 @@ def load(raw: dict, spec: dict | None = None) -> Circuit:
     warnings: list[str] = []
     comps: list[Component] = []
     seen_refs: set[str] = set()
+    canonical = copy.deepcopy(raw)  # same circuit with aliased pin names replaced by real ones
     prefs = (spec or {}).get("preferences", {})
     for i, rc in enumerate(raw["components"]):
         where = f"circuit.components[{i}] ({rc['ref']})"
@@ -103,10 +140,16 @@ def load(raw: dict, spec: dict | None = None) -> Circuit:
         seen_refs.add(rc["ref"])
         model = models_mod.get_model(rc["part"])
         if model is None:
-            errors.append(f"{where}: unknown part '{rc['part']}'. Call pcb_models to list the parts you can use.")
+            ids = list(models_mod.all_models())
+            close = difflib.get_close_matches(rc["part"], ids, n=3, cutoff=0.5) or \
+                [i for i in ids if rc["part"].lower() in i.lower()][:3]
+            hint = f" Did you mean {', '.join(close)}?" if close else ""
+            errors.append(f"{where}: unknown part '{rc['part']}'.{hint} Call pcb_models to list the parts you can use.")
             continue
-        comp = Component(ref=rc["ref"], part=model["id"], model=model, pins=dict(rc["pins"]),
-                         note=rc.get("note", ""))
+        pins, notes = _alias_pins(rc["pins"], model)
+        warnings.extend(f"{rc['ref']}: {n}" for n in notes)
+        canonical["components"][i]["pins"] = dict(pins)
+        comp = Component(ref=rc["ref"], part=model["id"], model=model, pins=pins, note=rc.get("note", ""))
         errors.extend(_check_pins(where, comp))
         errors.extend(_check_value(where, comp, rc, prefs))
         prefix = model.get("ref_prefix")
@@ -117,7 +160,7 @@ def load(raw: dict, spec: dict | None = None) -> Circuit:
     if errors:
         raise CircuitError(errors, warnings)
     circuit = Circuit(name=raw.get("name", ""), description=raw.get("description", ""),
-                      components=comps, raw=copy.deepcopy(raw), warnings=warnings)
+                      components=comps, raw=canonical, warnings=warnings)
     erc_errors, erc_warnings = erc(circuit, spec)
     circuit.warnings.extend(erc_warnings)
     if erc_errors:
