@@ -202,21 +202,31 @@ class Project:
 
     def _select_parts(self, circ, report, spec, catalog_path) -> dict:
         from .kicad.netlist import write_netlist
+        pkg = spec.get("preferences", {}).get("passive_package", "0603")
         try:
             sel = select_mod.select(circ, report, spec, catalog_path)
         except catalog_db.CatalogMissing as exc:
-            netlist = write_netlist(circ, None, self.name, spec.get("preferences", {}).get("passive_package", "0603"))
-            self.path(f"{self.name}.net").write_text(netlist)
+            self.path(f"{self.name}.net").write_text(write_netlist(circ, None, self.name, pkg))
+            self._write_schematic(circ, None, pkg)
             return {"passed": False, "summary": f"FAIL: {exc}", "failures": [{"message": str(exc)}],
                     "catalog_missing": True}
         _write_json(self.path("parts.json"), sel)
-        netlist = write_netlist(circ, sel["parts"], self.name,
-                                spec.get("preferences", {}).get("passive_package", "0603"))
-        self.path(f"{self.name}.net").write_text(netlist)
+        self.path(f"{self.name}.net").write_text(write_netlist(circ, sel["parts"], self.name, pkg))
+        self._write_schematic(circ, sel["parts"], pkg)
         from .fab import write_bom
         write_bom(sel, self.path("bom_jlcpcb.csv"))
         return {"passed": sel["passed"], "summary": select_mod.summarize(sel),
                 "failures": sel["failures"], "cost": sel["cost"], "sample_catalog": sel["catalog"]["sample"]}
+
+    def _write_schematic(self, circ, parts, pkg, dest: Path | None = None) -> Path | None:
+        """KiCad schematic next to the netlist; skipped (not fatal) if the symbol libraries are missing."""
+        from .kicad import libs
+        from .kicad.schematic import write_schematic
+        if libs.symbol_dir() is None:
+            return None
+        dest = dest or self.path(f"{self.name}.kicad_sch")
+        dest.write_text(write_schematic(circ, parts, self.name, pkg))
+        return dest
 
     def circuit(self) -> circuit_mod.Circuit:
         spec = self.spec()

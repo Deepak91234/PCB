@@ -51,15 +51,17 @@ board ◄── KiCad DRC ◄── Freerouting ◄── placer ◄── const
 4. **Source.** Each part is matched against a local JLCPCB catalog: exact value; tolerance no worse than
    verification assumed; power, voltage and current ratings above the simulated worst case with derating;
    and enough stock. Basic parts win, then preferred, then price. Footprints and symbols are checked against
-   your installed KiCad libraries. The same connections become a KiCad netlist and a JLCPCB BOM.
+   your installed KiCad libraries. The same connections become a KiCad netlist, a KiCad schematic and a
+   JLCPCB BOM.
 5. **Lay out.** `pcb_layout` takes placement constraints, never coordinates: "C1 near U1's IN pin",
    "J1 on the left edge", "J1 → U1 → J2 left to right". Datasheet capacitors and connectors get their
    constraints automatically. A deterministic simulated-annealing placer positions the parts. Track widths
    come from the simulated net currents (IPC-2221). Freerouting draws the copper, ground pours are added,
    and KiCad's DRC must report 0 errors and 0 unconnected items.
-6. **Watch and build.** The placement and routing are recorded. `pcbagent replay` opens the board in
-   KiCad's PCB editor and plays the whole sequence back with no clicks. `pcbagent fab` writes Gerbers,
-   drill, BOM and CPL.
+6. **Watch and build.** The `layout/` folder is a normal KiCad project (`.kicad_pro`, `.kicad_sch`,
+   `.kicad_pcb`), with every footprint linked to its schematic symbol. The placement and routing are
+   recorded: `pcbagent replay` opens the board in KiCad's PCB editor and plays the whole sequence back
+   with no clicks. `pcbagent fab` writes Gerbers, drill, BOM and CPL.
 
 After the first prompt the run continues on its own. Whenever the model stops early, the Pi extension (or
 the standalone loop) reads the design state and pushes the model to the next step. That continues until
@@ -117,7 +119,7 @@ In Pi, pick your local model with `/model` (the extension registers your local O
 
 | Command | |
 |---|---|
-| `/design [--no-layout] <request>` | full run; keeps going until DRC-clean, the budget runs out, or Escape |
+| `/design [--no-layout] [--watch] <request>` | full run; keeps going until DRC-clean, the budget runs out, or Escape. `--watch` opens the KiCad replay at the end |
 | `/layout [notes]` | re-run placement and routing for the active design |
 | `/pcb-status` · `/pcb-open <dir>` · `/pcb-stop` | inspect, switch designs, stop auto-continue |
 | `/pcb-replay` · `/pcb-fab` | replay in KiCad, export Gerbers/BOM/CPL |
@@ -185,6 +187,8 @@ container.
 - **Planned tool calls and a restricted tool set.** This was the "what's next" item. Six typed tools with
   schema-constrained arguments replace free-form shell and file editing.
 - **Fabrication outputs implemented**, not just planned: Gerbers, drill, BOM and CPL.
+- **A real KiCad project.** Alongside the board there is a generated schematic, checked by having KiCad
+  derive the netlist from it and comparing that against the circuit.
 
 ## Limitations (read before ordering boards)
 
@@ -207,7 +211,7 @@ container.
 ## Development
 
 ```bash
-pip install -e '.[test]' && pytest           # 84 tests; KiCad/Freerouting/Pi tests skip if absent
+pip install -e '.[test]' && pytest           # 86 tests; KiCad/Freerouting/Pi tests skip if absent
 npm install && npm run typecheck             # Pi extension against the real Pi type definitions
 pcbagent schema --write schemas              # after changing schemas or prompts (a test checks this)
 python scripts/make_sample_catalog.py        # regenerate the SAMPLE catalog
@@ -231,7 +235,6 @@ pi/test/fake_model_server.py                scripted OpenAI-compatible model for
 ## Roadmap
 
 - Transient analysis (ripple, start-up), then switching regulators with a guided topology library
-- KiCad schematic (`.kicad_sch`) generation next to the netlist
 - JLCPCB CPL rotation corrections per package
 - Live view while routing via KiCad 9's IPC API
 - Benchmarks of local models on a suite of reference requests

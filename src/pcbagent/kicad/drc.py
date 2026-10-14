@@ -62,8 +62,10 @@ def run_cli(board: Path, out_json: Path) -> dict | None:
     """kicad-cli DRC (KiCad 8+). Returns parsed result or None if unsupported."""
     if kicad_major() < 8:
         return None
-    cmd = [find_kicad_cli(), "pcb", "drc", "--format", "json", "--severity-all", "--units", "mm",
-           "-o", str(out_json), str(board)]
+    cmd = [find_kicad_cli(), "pcb", "drc", "--format", "json", "--severity-all", "--units", "mm"]
+    if board.with_suffix(".kicad_sch").exists():
+        cmd.append("--schematic-parity")  # reported as footprint_errors; not counted as DRC errors
+    cmd += ["-o", str(out_json), str(board)]
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     if not out_json.exists():
         raise RuntimeError(f"kicad-cli pcb drc failed: {(proc.stderr or proc.stdout).strip()[:400]}")
@@ -81,6 +83,7 @@ def summarize(parsed: dict) -> dict:
     for v in warnings:
         warn_types[v["type"]] = warn_types.get(v["type"], 0) + 1
     return {"errors": len(errors), "warnings": len(warnings), "unconnected": len(unconnected),
+            "parity_issues": len(parsed.get("footprint_errors", [])),
             "error_types": by_type, "warning_types": warn_types,
             "first_errors": [_describe(v) for v in errors[:8]],
             "first_unconnected": [_describe(v) for v in unconnected[:8]]}

@@ -99,6 +99,34 @@ def test_footprint_parse_from_text():
     assert [p.number for p in fp.pads] == ["1", "2"] and not fp.through_hole
 
 
+@needs_kicad
+@pytest.mark.parametrize("example", ["divider", "ldo"])
+def test_schematic_round_trips_through_kicad(tmp_path, example):
+    """KiCad parses the generated schematic and derives exactly the circuit's nets from it."""
+    from pcbagent.kicad.schematic import write_schematic
+    from pcbagent.kicad.tools import find_kicad_cli
+    spec = spec_mod.normalize(load_example(example, "spec"))
+    circ = circuit_mod.load(load_example(example, "circuit"), spec)
+    sch = tmp_path / f"{example}.kicad_sch"
+    sch.write_text(write_schematic(circ, None, example))
+    out = tmp_path / "from_kicad.net"
+    proc = subprocess.run([find_kicad_cli(), "sch", "export", "netlist", "-o", str(out), str(sch)],
+                          capture_output=True, text=True, timeout=120)
+    assert proc.returncode == 0, proc.stderr
+    tree = sexpr.loads(out.read_text())
+    got = {str(sexpr.value(n, "name")).lstrip("/"): sorted((str(sexpr.value(x, "ref")), str(sexpr.value(x, "pin")))
+                                                          for x in sexpr.children(n, "node"))
+           for n in sexpr.children(sexpr.child(tree, "nets"), "net")}
+    want: dict = {}
+    for c in circ.components:
+        for pin, net in c.pins.items():
+            want.setdefault(net, []).append((c.ref, c.model["kicad"]["pins"][pin]))
+    assert got == {k: sorted(v) for k, v in want.items()}
+    comps = {str(sexpr.value(c, "ref")): str(sexpr.value(c, "footprint"))
+             for c in sexpr.children(sexpr.child(tree, "components"), "comp")}
+    assert comps["J1"].startswith("Connector_PinHeader_2.54mm:")
+
+
 @needs_layout
 @pytest.mark.parametrize("example", ["divider", "ldo"])
 def test_full_pipeline_routes_drc_clean(tmp_path, example):
@@ -116,6 +144,13 @@ def test_full_pipeline_routes_drc_clean(tmp_path, example):
     trace = json.loads((board.parent / "layout_trace.json").read_text())
     assert len(trace["placement_frames"]) > 10 and trace["routing"]
     assert p.state()["phase"] == "done"
+    # Footprints carry the UUID path of their schematic symbol, so KiCad links PCB and schematic.
+    sch = board.with_suffix(".kicad_sch")
+    assert sch.exists()
+    sym_uuids = {str(sexpr.value(s, "uuid")) for s in sexpr.children(sexpr.loads(sch.read_text()), "symbol")}
+    fp_paths = {str(sexpr.value(f, "path")).lstrip("/") for f in sexpr.children(sexpr.loads(board.read_text()),
+                                                                                 "footprint")}
+    assert fp_paths == sym_uuids
     # Replay must end in exactly the saved board: run the plugin headless under KiCad's Python.
     from pcbagent.kicad.tools import find_kicad_python
     plugin_dir = Path(__file__).resolve().parents[1] / "src" / "pcbagent" / "kicad" / "plugin"

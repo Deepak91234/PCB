@@ -115,6 +115,9 @@ def build(job: dict) -> dict:
         fp.SetOrientationDegrees(float(f["rotation"]))
         for k, v in f.get("fields", {}).items():
             _set_field(fp, k, v)
+        if f.get("path"):
+            # Links the footprint to its schematic symbol (Update PCB from Schematic matches by this).
+            fp.SetPath(pcbnew.KIID_PATH(f["path"]))
         board.Add(fp)
         for pad in fp.Pads():
             net = f["pads"].get(pad.GetNumber())

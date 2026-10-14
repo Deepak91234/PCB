@@ -92,6 +92,7 @@ interface RunState {
 	dir?: string;
 	active: boolean;
 	includeLayout: boolean;
+	watch: boolean;
 	maxCircuitAttempts: number;
 	maxLayoutAttempts: number;
 	idleNudges: number;
@@ -102,6 +103,7 @@ interface RunState {
 const state: RunState = {
 	active: false,
 	includeLayout: true,
+	watch: process.env.PCBAGENT_WATCH === "1",
 	maxCircuitAttempts: Number(process.env.PCBAGENT_MAX_ATTEMPTS || 20),
 	maxLayoutAttempts: Number(process.env.PCBAGENT_MAX_LAYOUT_ATTEMPTS || 6),
 	idleNudges: 0,
@@ -413,6 +415,10 @@ export default async function pcbagent(pi: ExtensionAPI) {
 		}
 		if (status.phase === "done" || (status.phase === "layout" && !state.includeLayout)) {
 			finish(ctx, `PCBAgent: ${status.phase === "done" ? "board routed, DRC clean" : "circuit verified and sourced"} (${state.dir})`);
+			if (status.phase === "done" && state.watch) {
+				const r = await runCli(["replay", state.dir]);
+				if (ctx.hasUI) ctx.ui.notify(r.json?.message ?? "PCBAgent: could not start the KiCad replay", "info");
+			}
 			return;
 		}
 		if (status.circuit_attempts >= state.maxCircuitAttempts && status.phase !== "layout") {
@@ -459,18 +465,25 @@ export default async function pcbagent(pi: ExtensionAPI) {
 	};
 
 	pi.registerCommand("design", {
-		description: "Design a verified, routed PCB from a request (runs until done or Escape)",
+		description: "Design a verified, routed PCB from a request (runs until done or Escape); --watch replays it in KiCad",
 		handler: async (args, ctx) => {
 			let request = args.trim();
 			let includeLayout = true;
-			if (request.startsWith("--no-layout")) {
-				includeLayout = false;
-				request = request.replace("--no-layout", "").trim();
+			let watch = process.env.PCBAGENT_WATCH === "1";
+			for (;;) {
+				if (request.startsWith("--no-layout")) {
+					includeLayout = false;
+					request = request.slice("--no-layout".length).trim();
+				} else if (request.startsWith("--watch")) {
+					watch = true;
+					request = request.slice("--watch".length).trim();
+				} else break;
 			}
 			if (!request) {
-				ctx.ui.notify("Usage: /design [--no-layout] <what the board should do>", "warning");
+				ctx.ui.notify("Usage: /design [--no-layout] [--watch] <what the board should do>", "warning");
 				return;
 			}
+			state.watch = watch;
 			if (!ctx.isIdle()) {
 				ctx.ui.notify("Agent is busy; wait or press Escape first.", "warning");
 				return;

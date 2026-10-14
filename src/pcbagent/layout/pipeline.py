@@ -128,6 +128,8 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
         cons_report.append({**{kk: vv for kk, vv in c.items() if kk != "auto"}, "auto": c.get("auto", False),
                             "satisfied": cost < 0.05, "penalty": round(cost, 3)})
 
+    from ..kicad.schematic import footprint_paths
+    sym_paths = footprint_paths(circuit)
     ox, oy = ORIGIN
     placements = []
     fp_jobs = []
@@ -139,7 +141,8 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
         lib = item.fp.fpid.partition(":")[0]
         fp_jobs.append({"ref": c.ref, "value": c.value_text(), "fpid": item.fp.fpid,
                         "lib_path": str(libs.footprint_dir() / f"{lib}.pretty"),
-                        "x": x, "y": y, "rotation": rot, "pads": item.pad_nets, "fields": fields})
+                        "x": x, "y": y, "rotation": rot, "pads": item.pad_nets, "fields": fields,
+                        "path": sym_paths[c.ref]})
         placements.append({"ref": c.ref, "x_mm": ox + x, "y_mm": oy + y, "rotation": rot, "side": "top",
                            "footprint": item.fp.fpid})
     (layout_dir / "placement.json").write_text(json.dumps(
@@ -171,6 +174,11 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
                              "nets": sorted(circuit.nets()), "footprints": fp_jobs, "rules": RULES,
                              "netclasses": netclasses}, layout_dir)
         result["assigned_netclasses"] = build["netclasses"]
+        # Same basename as the board, so KiCad opens schematic + PCB as one project.
+        sch = project._write_schematic(circuit, (parts or {}).get("parts"), default_pkg,
+                                       layout_dir / f"{name}.kicad_sch")
+        if sch:
+            result["schematic"] = str(sch)
         fr = freerouting.route(dsn_path, ses_path, max_passes=max_passes)
         result["freerouting"] = {k: v for k, v in fr.items() if k != "command"}
         if not fr["ok"]:
