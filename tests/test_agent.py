@@ -138,3 +138,37 @@ def test_pi_extension_end_to_end(tmp_path, fake_model, sample_catalog):
     design = next((tmp_path / "designs").iterdir())
     state = json.loads((design / "pcbagent.json").read_text())
     assert state["phase"] == "done" and state["layout"]["passed"]
+
+
+@needs_layout
+@pytest.mark.skipif(not PI.exists(), reason="Pi not installed (npm install)")
+def test_pi_interactive_tui_end_to_end(tmp_path, fake_model, sample_catalog):
+    """The primary user path: typing /design into Pi's interactive TUI (driven through a pty)."""
+    host, log = fake_model
+    designs = tmp_path / "designs"
+    done = designs / "5_v_to_3_3_v_divider_for_an_adc_input" / "pcbagent.json"
+    env = {**os.environ, "OLLAMA_HOST": host, "PI_OFFLINE": "1", "PI_TELEMETRY": "0",
+           "PI_SKIP_VERSION_CHECK": "1", "PI_CODING_AGENT_DIR": str(tmp_path / "agent"),
+           "PCBAGENT_CATALOG": str(sample_catalog), "PCBAGENT_DESIGNS_DIR": str(designs),
+           "PCBAGENT_PYTHON": sys.executable, "TUI_INPUT": "/design 5 V to 3.3 V divider for an ADC input"}
+    marker = tmp_path / "finished"
+    # Wait for the run to finish: the design reaches phase "done".
+    watcher = subprocess.Popen([sys.executable, "-c", f"""
+import json, time, pathlib
+p = pathlib.Path({str(done)!r})
+for _ in range(1200):
+    try:
+        if json.loads(p.read_text())["phase"] == "done":
+            pathlib.Path({str(marker)!r}).write_text("ok"); break
+    except Exception:
+        pass
+    time.sleep(0.25)
+"""])
+    proc = subprocess.run([sys.executable, str(ROOT / "pi" / "test" / "tui_driver.py"), str(marker), "240", "--",
+                           str(PI), "--no-session", "--no-extensions", "--no-skills", "--no-context-files",
+                           "-e", str(ROOT / "pi" / "extensions" / "pcbagent.ts"), "--model", "ollama/fake-nemotron"],
+                          cwd=ROOT, env=env, capture_output=True, timeout=300)
+    watcher.kill()
+    assert proc.returncode == 0, proc.stdout[-1500:]
+    assert actions(log) == ["pcb_models", "pcb_spec", "pcb_circuit", "<text>", "pcb_circuit", "<text>",
+                            "pcb_layout", "<text>"]

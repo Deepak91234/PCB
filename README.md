@@ -222,9 +222,11 @@ container.
   differently in JLCPCB's system, so check their DFM preview.
 - Tested here with KiCad **7.0.11**, ngspice 42, Freerouting 2.1.0, Java 21 and Pi 1.2.0. The KiCad 8+
   path (`kicad-cli pcb drc` JSON) is implemented but was not exercised in this environment.
-- The agent harness (Pi extension and standalone loop) is tested end to end with a **scripted** model that
-  makes mistakes and stops early on purpose. It has not been benchmarked here against Nemotron itself
-  (there was no GPU in the build environment), so expect to tune prompts for your model.
+- The agent harness is tested end to end with a **scripted** model that makes mistakes, sends sloppy
+  arguments and stops early on purpose. The tests cover Pi's interactive TUI (driven through a
+  pseudo-terminal), Pi's print mode, and the standalone loop on both Ollama APIs. It has not been
+  benchmarked here against Nemotron itself (there was no GPU in the build environment), so expect to tune
+  prompts for your model.
 
 ## Development
 
