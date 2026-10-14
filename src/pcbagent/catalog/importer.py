@@ -47,7 +47,9 @@ ALIASES = {
     "library_type": ["library_type", "library type", "component library type"],
     "basic": ["basic"],
     "preferred": ["preferred"],
-    "extra": ["extra"],
+    "extra": ["extra", "jlc_extra"],
+    "attributes": ["attributes"],
+    "present": ["present"],
 }
 
 
@@ -90,9 +92,20 @@ def normalize_record(rec: dict, source: str) -> dict | None:
     lcsc = _lcsc(rec.get("lcsc", ""))
     if not lcsc:
         return None
+    if str(rec.get("present", "1")).strip() in ("0", "False", "false"):
+        return None  # jlcparts v2 keeps parts JLCPCB no longer lists, flagged present = 0
     category = str(rec.get("category") or "")
     subcategory = str(rec.get("subcategory") or "")
     attrs = attributes_from_extra(rec.get("extra"))
+    # jlcparts v2 (and the CDFER CSV derived from it) stores JLCPCB's parameters as a JSON object
+    direct = rec.get("attributes")
+    if isinstance(direct, str) and direct.strip().startswith("{"):
+        try:
+            direct = json.loads(direct)
+        except ValueError:
+            direct = None
+    if isinstance(direct, dict):
+        attrs = {**attrs, **{k: v for k, v in direct.items() if isinstance(v, str)}}
     description = str(rec.get("description") or "")
     if not description and rec.get("extra"):
         try:

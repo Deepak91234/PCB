@@ -134,3 +134,53 @@ def test_unstocked_value_suggests_neighbours(tmp_path, sample_catalog):
     assert not res["passed"]
     fail = res["failures"][0]
     assert fail["ref"] == "R2" and "19.6kΩ" in fail["nearest_in_stock"]
+
+
+def test_import_jlcparts_v2_and_cdfer_csv(tmp_path):
+    """Current jlcparts source DB (jlc_components) and the CDFER CSV dumped from it."""
+    src = tmp_path / "cache_v2.sqlite3"
+    conn = sqlite3.connect(src)
+    conn.executescript("""
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+        CREATE TABLE jlc_components (lcsc INTEGER PRIMARY KEY, fetched_at INTEGER, present INTEGER,
+            category TEXT, subcategory TEXT, mfr TEXT, package TEXT, joints INTEGER, manufacturer TEXT,
+            library_type TEXT, preferred INTEGER, last_on_stock INTEGER, description TEXT, datasheet TEXT,
+            stock INTEGER, price TEXT, attributes TEXT, rohs INTEGER, eccn TEXT, assembly INTEGER,
+            assembly_process TEXT, assembly_mode TEXT, website_component_id TEXT, attrition TEXT);
+    """)
+    rows = [
+        (25804, 0, 1, "Resistors", "Chip Resistor - Surface Mount", "0603WAF1002T5E", "0603", 2, "UNI-ROYAL",
+         "base", 0, 0, "", "", 1000000, "1-199:0.0006,200-:0.0004",
+         json.dumps({"Resistance": "10kΩ", "Power(Watts)": "100mW", "Tolerance": "±1%"}),
+         1, "", 1, "SMT", "", "", "{}"),
+        (1525, 0, 1, "Capacitors", "Multilayer Ceramic Capacitors MLCC - SMD/SMT", "CL05B104KO5NNNC", "0402", 2,
+         "Samsung", "base", 0, 0, "", "", 500000, "1-:0.001",
+         json.dumps({"Capacitance": "100nF", "Voltage Rated": "16V", "Tolerance": "±10%",
+                     "Temperature Coefficient": "X7R"}), 1, "", 1, "SMT", "", "", "{}"),
+        (999, 0, 0, "Resistors", "Chip Resistor - Surface Mount", "GONE", "0603", 2, "X", "expand", 0, 0,
+         "", "", 0, "", "{}", 1, "", 1, "SMT", "", "", "{}"),
+    ]
+    conn.executemany(f"INSERT INTO jlc_components VALUES ({','.join('?' * 24)})", rows)
+    conn.commit()
+    out = tmp_path / "cat.sqlite"
+    res = importer.import_file(src, out)
+    assert res["rows_kept"] == 2  # the present = 0 part is skipped
+    c = db.connect(out)
+    r = dict(c.execute("SELECT * FROM parts WHERE lcsc='C25804'").fetchone())
+    assert (r["value"], r["power_rating"], r["tolerance_pct"], r["library_type"]) == (10e3, 0.1, 1.0, "basic")
+    cap = dict(c.execute("SELECT * FROM parts WHERE lcsc='C1525'").fetchone())
+    assert cap["value"] == pytest.approx(100e-9) and cap["voltage_rating"] == 16 and cap["dielectric"] == "X7R"
+
+    # The CDFER CSV is `SELECT * FROM jlc_components` plus a basic flag and assembly columns.
+    header = [d[1] for d in sqlite3.connect(src).execute("PRAGMA table_info(jlc_components)")]
+    import csv
+    csv_path = tmp_path / "jlcpcb-components-basic-preferred.csv"
+    with open(csv_path, "w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(header + ["basic", "Assembly Process", "Min Order Qty", "Attrition Qty"])
+        for row in rows[:2]:
+            w.writerow(list(row) + [1, "SMT", 20, 10])
+    out2 = tmp_path / "cat2.sqlite"
+    assert importer.import_file(csv_path, out2)["rows_kept"] == 2
+    r2 = dict(db.connect(out2).execute("SELECT * FROM parts WHERE lcsc='C25804'").fetchone())
+    assert r2["value"] == 10e3 and r2["library_type"] == "basic"
