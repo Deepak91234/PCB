@@ -3,8 +3,10 @@
 Usage: ``<kicad-python> worker.py job.json`` prints one JSON result line.
 
 Actions
-  build   create the board (footprints, nets, outline, net classes, rules),
-          save .kicad_pcb/.kicad_pro and export a Specctra DSN
+  build   create the board (footprints, nets, outline) and save .kicad_pcb, then
+          write net classes and rules into .kicad_pro
+  dsn     reload the board in a fresh process (so the project file is read) and
+          export a Specctra DSN for Freerouting
   route   apply a Freerouting session (tracks, vias), add ground pours,
           fill zones, save, and write a DRC report
 
@@ -132,17 +134,22 @@ def build(job: dict) -> dict:
     path = job["board_path"]
     if not pcbnew.SaveBoard(path, board):
         raise RuntimeError("SaveBoard failed")
+    # Net classes and rules live in the .kicad_pro. KiCad caches the project inside this
+    # process, so the DSN export that must see them runs in a fresh worker ("dsn").
     _patch_project(os.path.splitext(path)[0] + ".kicad_pro", job)
-    board = pcbnew.LoadBoard(path)
-    ok = pcbnew.ExportSpecctraDSN(board, job["dsn_path"])
-    if not ok:
-        raise RuntimeError("ExportSpecctraDSN failed")
+    return {"ok": True, "board": path, "placed": placed}
+
+
+def dsn(job: dict) -> dict:
+    board = pcbnew.LoadBoard(job["board_path"])
     classes = {}
     for name in job["nets"]:
         ni = board.FindNet(name)
         if ni:
             classes[name] = ni.GetNetClassName()
-    return {"ok": True, "board": path, "dsn": job["dsn_path"], "placed": placed, "netclasses": classes}
+    if not pcbnew.ExportSpecctraDSN(board, job["dsn_path"]):
+        raise RuntimeError("ExportSpecctraDSN failed")
+    return {"ok": True, "dsn": job["dsn_path"], "netclasses": classes}
 
 
 def _layer(board, name: str):
@@ -249,7 +256,7 @@ def main() -> int:
     with open(job_path) as fh:
         job = json.load(fh)
     try:
-        result = {"build": build, "route": route}[job["action"]](job)
+        result = {"build": build, "dsn": dsn, "route": route}[job["action"]](job)
     except Exception as exc:  # noqa: BLE001 - report everything to the parent process
         result = {"ok": False, "error": f"{type(exc).__name__}: {exc}", "traceback": traceback.format_exc()}
     result["kicad_version"] = pcbnew.Version() if hasattr(pcbnew, "Version") else "unknown"

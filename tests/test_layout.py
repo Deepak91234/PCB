@@ -148,6 +148,15 @@ def test_full_pipeline_routes_drc_clean(tmp_path, example):
     trace = json.loads((board.parent / "layout_trace.json").read_text())
     assert len(trace["placement_frames"]) > 10 and trace["routing"]
     assert p.state()["phase"] == "done"
+    # Tracks on current-carrying nets are routed at least as wide as their IPC-2221 net class.
+    widths = {n: nc["track"] for nc in res["netclasses"] for n in nc["nets"]}
+    board_tree = sexpr.loads(board.read_text())
+    net_names = {str(n[1]): str(n[2]) for n in sexpr.children(board_tree, "net") if len(n) > 2}
+    for seg in sexpr.children(board_tree, "segment"):
+        net = net_names.get(str(sexpr.value(seg, "net")))
+        if net in widths:
+            assert float(sexpr.value(seg, "width")) >= widths[net] - 1e-6, (net, sexpr.value(seg, "width"))
+    assert all(res["assigned_netclasses"][n] == nc["name"] for nc in res["netclasses"] for n in nc["nets"])
     # Footprints carry the UUID path of their schematic symbol, so KiCad links PCB and schematic.
     sch = board.with_suffix(".kicad_sch")
     assert sch.exists()

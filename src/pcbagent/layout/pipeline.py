@@ -169,11 +169,18 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
         return result
 
     try:
-        build = _run_worker({"action": "build", "board_path": str(board_path), "dsn_path": str(dsn_path),
-                             "origin": list(ORIGIN), "width": placed.width, "height": placed.height,
-                             "nets": sorted(circuit.nets()), "footprints": fp_jobs, "rules": RULES,
-                             "netclasses": netclasses}, layout_dir)
-        result["assigned_netclasses"] = build["netclasses"]
+        _run_worker({"action": "build", "board_path": str(board_path),
+                     "origin": list(ORIGIN), "width": placed.width, "height": placed.height,
+                     "nets": sorted(circuit.nets()), "footprints": fp_jobs, "rules": RULES,
+                     "netclasses": netclasses}, layout_dir)
+        exported = _run_worker({"action": "dsn", "board_path": str(board_path), "dsn_path": str(dsn_path),
+                                "nets": sorted(circuit.nets())}, layout_dir)
+        result["assigned_netclasses"] = exported["netclasses"]
+        wrong = [f"{net} (wanted {nc['name']}, got {exported['netclasses'].get(net)})"
+                 for nc in netclasses for net in nc["nets"] if exported["netclasses"].get(net) != nc["name"]]
+        if wrong:
+            # Routing at the default width would silently undersize power tracks.
+            raise LayoutError("KiCad did not apply the current-based net classes: " + ", ".join(wrong))
         # Same basename as the board, so KiCad opens schematic + PCB as one project.
         sch = project._write_schematic(circuit, (parts or {}).get("parts"), default_pkg,
                                        layout_dir / f"{name}.kicad_sch")
