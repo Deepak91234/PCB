@@ -17,7 +17,9 @@ from __future__ import annotations
 import json
 import os
 import sys
+import threading
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -46,8 +48,17 @@ TOOLS = [
 
 
 class Agent:
+    """One design conversation with a local model.
+
+    ``run(request)`` starts it; ``reply(text)`` continues it with a follow-up
+    from the user (the web UI's chat). ``on_event`` receives structured events
+    for a live view; ``log`` gets the same story as plain text for the
+    terminal. The model messages are saved to ``agent/messages.json`` in the
+    design folder after every turn, so a conversation survives a restart.
+    """
+
     def __init__(self, project, host: str, model: str, include_layout: bool = True,
-                 max_circuit: int = 12, max_layout: int = 6, log=print):
+                 max_circuit: int = 12, max_layout: int = 6, log=print, on_event=None):
         self.project = project
         self.host = host.rstrip("/")
         self.model = model
@@ -55,16 +66,51 @@ class Agent:
         self.max_circuit = max_circuit
         self.max_layout = max_layout
         self.log = log
+        self.on_event = on_event
+        self.cancel = threading.Event()
         self.messages: list[dict] = []
         self.num_ctx = int(os.environ.get("PCBAGENT_NUM_CTX", "32768"))
+        self._base = (0, 0)   # circuit and layout attempts when the current turn started
         self.api = self.detect_api()
+
+    def emit(self, kind: str, **data) -> None:
+        if self.on_event:
+            try:
+                self.on_event({"type": kind, **data})
+            except Exception:  # noqa: BLE001 - a broken viewer must never stop the design run
+                pass
+
+    # --- transcript -----------------------------------------------------------
+    @property
+    def transcript_path(self) -> Path:
+        return self.project.path("agent", "messages.json")
+
+    def save_transcript(self) -> None:
+        path = self.transcript_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"model": self.model, "messages": self.messages}, ensure_ascii=False))
+        tmp.replace(path)
+
+    def load_transcript(self) -> bool:
+        try:
+            data = json.loads(self.transcript_path.read_text())
+        except (OSError, ValueError):
+            return False
+        self.messages = list(data.get("messages") or [])
+        return bool(self.messages)
 
     # --- model --------------------------------------------------------------
     def _post(self, path: str, body: dict) -> dict:
         req = urllib.request.Request(f"{self.host}{path}", data=json.dumps(body).encode(),
                                      headers={"Content-Type": "application/json", "Authorization": "Bearer ollama"})
-        with urllib.request.urlopen(req, timeout=float(os.environ.get("PCBAGENT_MODEL_TIMEOUT", "900"))) as resp:
-            return json.load(resp)
+        try:
+            with urllib.request.urlopen(req, timeout=float(os.environ.get("PCBAGENT_MODEL_TIMEOUT", "900"))) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as exc:
+            # Ollama explains itself in the body ("model 'x' not found, try pulling it first").
+            detail = exc.read().decode("utf-8", "replace")[:300]
+            raise ModelError(f"model endpoint returned HTTP {exc.code}: {detail}") from exc
 
     def detect_api(self) -> str:
         """Ollama's native API lets us set the context window per request; prefer it when present.
@@ -113,6 +159,10 @@ class Agent:
 
     # --- tools --------------------------------------------------------------
     def call_tool(self, name: str, args: dict) -> str:
+        return self._call_tool(name, args)[0]
+
+    def _call_tool(self, name: str, args: dict) -> tuple[str, bool, dict]:
+        """Run one tool. Returns (text for the model, whether it succeeded, facts for a live view)."""
         from ..catalog.db import CatalogMissing
         from ..circuit import CircuitError
         from ..layout import pipeline
@@ -127,90 +177,187 @@ class Agent:
         try:
             if name == "pcb_models":
                 kind = args.get("kind")
-                return "\n".join(json.dumps(models_mod.summary(m)) for m in models_mod.all_models().values()
-                                 if not kind or m["kind"] == kind)
+                rows = [json.dumps(models_mod.summary(m)) for m in models_mod.all_models().values()
+                        if not kind or m["kind"] == kind]
+                return "\n".join(rows), True, {"count": len(rows)}
             if name == "pcb_parts_search":
-                return _search(args)
+                text = _search(args)
+                return text, not text.startswith("no matching"), {}
             if name == "pcb_spec":
                 spec = p.write_spec(args)
                 return (f"spec locked ({len(spec['requirements'])} requirements). "
-                        "Next: call pcb_circuit with the full circuit.")
+                        "Next: call pcb_circuit with the full circuit."), True, \
+                    {"title": spec.get("title"), "requirements": len(spec["requirements"])}
             if name == "pcb_circuit":
                 res = p.submit_circuit(args)
-                return res["summary"] + f"\nNext: {p.next_step()}"
+                v = res.get("verification") or {}
+                parts = res.get("parts") or {}
+                facts = {"attempt": res.get("attempt"), "version": res.get("version"), "stage": res.get("stage"),
+                         "verification_passed": res.get("verification_passed"),
+                         "failed": [r["message"] for r in v.get("requirements", []) if not r["passed"]]
+                         + v.get("rating_failures", []) + (res.get("errors") or [])[:8],
+                         "parts_passed": parts.get("passed"), "cost": parts.get("cost"),
+                         "sample_catalog": parts.get("sample_catalog")}
+                return res["summary"] + f"\nNext: {p.next_step()}", bool(res.get("passed")), facts
             if name == "pcb_layout":
-                res = pipeline.run(p, args)
-                return pipeline.summarize(res)
+                res = pipeline.run(p, args, progress=lambda text: self.emit("progress", text=text))
+                facts = {k: res.get(k) for k in ("passed", "board_mm", "drc", "tracks", "vias", "message")}
+                facts["unmet"] = [c for c in res.get("constraints", []) if not c.get("satisfied")]
+                return pipeline.summarize(res), bool(res.get("passed")), facts
             if name == "pcb_status":
-                return json.dumps(p.status(), indent=1, default=str)
-            return f"unknown tool {name}"
+                return json.dumps(p.status(), indent=1, default=str), True, {}
+            return f"unknown tool {name}", False, {}
         except (SpecError, CircuitError, ConstraintError) as exc:
-            return "Rejected:\n" + "\n".join(f"- {e}" for e in exc.errors)
+            return "Rejected:\n" + "\n".join(f"- {e}" for e in exc.errors), False, {"errors": exc.errors[:8]}
         except (ProjectError, CatalogMissing) as exc:
-            return f"Error: {exc}"
+            return f"Error: {exc}", False, {"errors": [str(exc)]}
 
     # --- loop -----------------------------------------------------------------
     def done(self) -> tuple[bool, str]:
         st = self.project.status()
+        circuit_tries = st["circuit_attempts"] - self._base[0]
+        layout_tries = st["layout_attempts"] - self._base[1]
         if st["phase"] == "done":
             return True, "board routed, DRC clean"
         if st["phase"] == "layout" and not self.include_layout:
             return True, "circuit verified and parts sourced"
-        if st["phase"] != "layout" and st["circuit_attempts"] >= self.max_circuit:
-            return True, f"stopped after {st['circuit_attempts']} circuit attempts"
-        if st["phase"] == "layout" and st["layout_attempts"] >= self.max_layout:
-            return True, f"stopped after {st['layout_attempts']} layout attempts"
+        if st["phase"] != "layout" and circuit_tries >= self.max_circuit:
+            return True, f"stopped after {circuit_tries} circuit attempts"
+        if st["phase"] == "layout" and layout_tries >= self.max_layout:
+            return True, f"stopped after {layout_tries} layout attempts"
         return False, ""
 
     def run(self, request: str, max_turns: int = 80) -> dict:
         self.messages = [
-            {"role": "system", "content": "You are PCBAgent, a careful electronics engineer. You design circuits "
-                                          "by calling tools; you never invent measurements."},
+            {"role": "system", "content": SYSTEM},
             {"role": "user", "content": prompts.kickoff(request, str(self.project.root), self.include_layout)},
         ]
+        self.save_transcript()
+        return self._loop(max_turns)
+
+    def reply(self, text: str, max_turns: int = 80) -> dict:
+        """Continue the conversation with a follow-up from the user."""
+        if not self.messages and not self.load_transcript():
+            # A design started elsewhere (Pi, or before transcripts existed): give the model the context afresh.
+            request = self.project.state().get("request") or text
+            self.messages = [
+                {"role": "system", "content": SYSTEM},
+                {"role": "user", "content": prompts.kickoff(request, str(self.project.root), self.include_layout)},
+            ]
+        self.messages.append({"role": "user", "content": prompts.follow_up(text, self.project.status())})
+        self.save_transcript()
+        return self._loop(max_turns, follow_up=True)
+
+    def _finish(self, result: dict) -> dict:
+        self.save_transcript()
+        self.emit("done", **result)
+        return result
+
+    def _loop(self, max_turns: int, follow_up: bool = False) -> dict:
+        st = self.project.status()
+        self._base = (st["circuit_attempts"], st["layout_attempts"])
         idle = 0
         for turn in range(max_turns):
+            if self.cancel.is_set():
+                return self._finish({"ok": False, "reason": "stopped by the user", "turns": turn})
             t0 = time.time()
+            self.emit("thinking", model=self.model)
             msg = self.chat()
             calls = msg.get("tool_calls") or []
             self.messages.append({"role": "assistant", "content": msg.get("content") or "",
                                   **({"tool_calls": calls} if calls else {})})
+            self.save_transcript()
             if msg.get("content"):
                 self.log(f"[model {time.time() - t0:.1f}s] {msg['content'].strip()[:300]}")
+                self.emit("assistant", text=msg["content"].strip(), seconds=round(time.time() - t0, 1))
             if calls:
                 idle = 0
                 for call in calls:
                     fn = call["function"]
+                    call_id = call.get("id", fn["name"])
+                    if self.cancel.is_set():
+                        out = "Skipped: the user stopped the run."
+                        self.messages.append({"role": "tool", "tool_call_id": call_id, "name": fn["name"],
+                                              "content": out})
+                        continue
                     try:
                         args = json.loads(fn.get("arguments") or "{}")
                     except json.JSONDecodeError as exc:
-                        out = f"Rejected: tool arguments are not valid JSON ({exc}). Send a JSON object."
+                        out, ok, facts = (f"Rejected: tool arguments are not valid JSON ({exc}). "
+                                          "Send a JSON object."), False, {"errors": [str(exc)]}
+                        self.emit("tool_call", id=call_id, name=fn["name"], summary="(unreadable arguments)")
                     else:
+                        args = args if isinstance(args, dict) else {}
                         self.log(f"[tool] {fn['name']}")
-                        out = self.call_tool(fn["name"], args if isinstance(args, dict) else {})
+                        self.emit("tool_call", id=call_id, name=fn["name"], summary=describe_call(fn["name"], args))
+                        t1 = time.time()
+                        out, ok, facts = self._call_tool(fn["name"], args)
+                        facts["seconds"] = round(time.time() - t1, 2)
                     self.log("       " + out.replace("\n", "\n       ")[:1500])
-                    self.messages.append({"role": "tool", "tool_call_id": call.get("id", fn["name"]),
+                    self.emit("tool_result", id=call_id, name=fn["name"], ok=ok, text=out[:4000], facts=facts,
+                              phase=self.project.state()["phase"])
+                    self.messages.append({"role": "tool", "tool_call_id": call_id,
                                           "name": fn["name"], "content": out[:8000]})
+                self.save_transcript()
+                if self.cancel.is_set():
+                    return self._finish({"ok": False, "reason": "stopped by the user", "turns": turn + 1})
                 finished, why = self.done()
                 if finished and not why.startswith("stopped"):
                     # Let the model write its closing summary, then stop.
+                    self.emit("thinking", model=self.model)
                     final = self.chat()
+                    self.messages.append({"role": "assistant", "content": final.get("content") or ""})
                     if final.get("content"):
                         self.log(f"[model] {final['content'].strip()[:500]}")
-                    return {"ok": True, "reason": why, "turns": turn + 1}
+                        self.emit("assistant", text=final["content"].strip())
+                    return self._finish({"ok": True, "reason": why, "turns": turn + 1})
                 if finished:
-                    return {"ok": False, "reason": why, "turns": turn + 1}
+                    return self._finish({"ok": False, "reason": why, "turns": turn + 1})
                 continue
             finished, why = self.done()
             if finished:
-                return {"ok": not why.startswith("stopped"), "reason": why, "turns": turn + 1}
+                return self._finish({"ok": not why.startswith("stopped"), "reason": why, "turns": turn + 1})
             idle += 1
             if idle > 3:
-                return {"ok": False, "reason": "the model stopped calling tools", "turns": turn + 1}
+                return self._finish({"ok": False, "reason": "the model stopped calling tools", "turns": turn + 1})
             nudge = prompts.continue_prompt(self.project.status(), self.max_circuit, self.max_layout)
             self.log("[pcbagent] " + nudge.splitlines()[0])
+            self.emit("nudge", text=nudge.splitlines()[0])
             self.messages.append({"role": "user", "content": nudge})
-        return {"ok": False, "reason": f"turn limit {max_turns} reached", "turns": max_turns}
+        return self._finish({"ok": False, "reason": f"turn limit {max_turns} reached", "turns": max_turns})
+
+
+class ModelError(OSError):
+    """The model endpoint answered with an error."""
+
+
+SYSTEM = ("You are PCBAgent, a careful electronics engineer. You design circuits by calling tools; "
+          "you never invent measurements.")
+
+
+def describe_call(name: str, args: dict) -> str:
+    """One line saying what a tool call asks for, for the live view."""
+    from ..cli import unwrap
+    try:
+        if name == "pcb_spec":
+            a = unwrap(args, "spec")
+            return f"{a.get('title') or 'spec'}: {len(a.get('requirements') or [])} requirements, " \
+                   f"{len(a.get('conditions') or [])} test conditions"
+        if name == "pcb_circuit":
+            comps = unwrap(args, "circuit").get("components") or []
+            parts = ", ".join(f"{c.get('ref')} {c.get('value') or c.get('part')}" for c in comps[:8]
+                              if isinstance(c, dict))
+            return f"{len(comps)} components: {parts}" + (" ..." if len(comps) > 8 else "")
+        if name == "pcb_layout":
+            cons = unwrap(args, "constraints").get("constraints") or []
+            return f"{len(cons)} placement constraints"
+        if name == "pcb_parts_search":
+            return " ".join(f"{k}={v}" for k, v in args.items() if v) or "all parts"
+        if name == "pcb_models":
+            return f"kind={args['kind']}" if args.get("kind") else "all part models"
+    except (AttributeError, TypeError):
+        pass
+    return ""
 
 
 def _as_obj(args):

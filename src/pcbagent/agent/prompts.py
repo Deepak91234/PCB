@@ -61,6 +61,23 @@ def continue_prompt(status: dict, max_circuit: int, max_layout: int) -> str:
     return "\n".join(lines)
 
 
+def follow_up(text: str, status: dict) -> str:
+    """Wrap a follow-up message from the user in the current design state."""
+    phase = status.get("phase")
+    where = {"spec": "no spec is locked yet", "circuit": "the circuit has not passed yet",
+             "layout": "the circuit passed and parts are sourced; the board is not laid out yet",
+             "done": "the board is routed and DRC clean"}.get(phase, str(phase))
+    return (f'The user replied:\n\n"{text}"\n\n'
+            f"Current design state: {where} (circuit attempts {status.get('circuit_attempts')}, "
+            f"layout attempts {status.get('layout_attempts')}).\n"
+            "- If they ask for a change the locked spec allows (component values or parts, layout, board size), make "
+            "it now with the tools: submit the full revised circuit with pcb_circuit and/or call pcb_layout again. "
+            "Do not just say you will.\n"
+            "- If the change needs different requirements, say that the spec is locked and that they can start a new "
+            "design or unlock this one (`pcbagent spec-unlock`).\n"
+            "- If they ask a question, answer it from tool results only (pcb_status shows the current state).")
+
+
 def export() -> dict:
     return {"rules": RULES, "example": EXAMPLE, "steps": STEPS, "step_layout": STEP_LAYOUT,
             "step_no_layout": STEP_NO_LAYOUT}

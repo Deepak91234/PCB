@@ -292,6 +292,11 @@ def cmd_run(args) -> int:
     return agent_main(args)
 
 
+def cmd_serve(args) -> int:
+    from .web.server import main as serve_main
+    return serve_main(args)
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(prog="pcbagent", description="Local, verified PCB design.")
     ap.add_argument("--version", action="version", version=f"pcbagent {__version__}")
@@ -373,6 +378,17 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dir")
     sp.add_argument("--max-attempts", type=int, default=12)
     sp.add_argument("--no-layout", action="store_true")
+
+    sp = add("serve", cmd_serve, "chat with the agent in your browser (local web UI)")
+    sp.add_argument("--port", type=int, default=int(os.environ.get("PCBAGENT_PORT", "8765")))
+    sp.add_argument("--host", default="127.0.0.1", help="address to listen on (loopback only)")
+    sp.add_argument("--designs", default=os.environ.get("PCBAGENT_DESIGNS_DIR", "designs"),
+                    help="folder for designs (default ./designs)")
+    sp.add_argument("--model", default=os.environ.get("PCBAGENT_MODEL", "nemotron-3-nano"))
+    sp.add_argument("--ollama", default=os.environ.get("OLLAMA_HOST", "http://127.0.0.1:11434"),
+                    help="Ollama address")
+    sp.add_argument("--max-attempts", type=int, default=12, help="circuit attempts per message")
+    sp.add_argument("--no-browser", action="store_true", help="do not open a browser tab")
     return ap
 
 

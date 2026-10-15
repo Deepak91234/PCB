@@ -114,7 +114,31 @@ This runs the bundled example's spec, circuit and constraints through simulation
 placement, routing, DRC and fab export, then replays the layout in KiCad. Without a catalog it falls back
 to a clearly labelled **SAMPLE** catalog of fake part numbers so the demo still runs; don't order from it.
 
-### 3. Design with Pi (recommended)
+### 3. Chat in your browser
+
+```bash
+OLLAMA_CONTEXT_LENGTH=32768 ollama serve   # in one terminal (see the note below)
+pcbagent serve                             # in another; opens http://localhost:8765
+```
+
+Type the board you want and press Enter. The chat shows each step as it happens: the spec being
+locked, each circuit attempt with the checks it failed, the parts it picked, and the layout's progress
+through placement, Freerouting and DRC. The right-hand side fills in as results arrive: the board itself
+(hover a net, click a part, replay the placement and routing), the simulation results against the spec,
+the schematic, the BOM, and the KiCad and fabrication files to download. When the board is done you can
+keep chatting: ask why a part was chosen, or ask for a change, and the agent re-runs whatever the change
+needs.
+
+![The browser chat finishing a design (here driven by the scripted test model)](docs/web-ui.png)
+
+It is the same agent loop as `pcbagent run`, and designs are ordinary design folders in `./designs`
+(`--designs` to change), so you can continue them with the CLI or Pi. The server only listens on
+localhost, refuses requests addressed to any other host name, and requires a per-session token for
+anything that changes state. The page loads no fonts, scripts or images from the internet. One design
+runs at a time; **Stop** takes effect after the current step. Options: `--port`, `--model`, `--ollama`,
+`--no-browser`.
+
+### 4. Design with Pi
 
 ```bash
 OLLAMA_CONTEXT_LENGTH=32768 ollama serve   # see the note below
@@ -148,7 +172,7 @@ focused, and it means model output never runs as code. Your previous tool set is
 Scripted (print mode): `pi -p "/design ..." < /dev/null`. Pi reads stdin when it isn't a terminal, so
 close it.
 
-### 4. Or without Pi
+### 5. Or a single command
 
 ```bash
 pcbagent run "Scale a 0-5 V signal to 0-3.3 V for a 3.3 V ADC input" --model nemotron-3-nano
@@ -235,7 +259,7 @@ container.
 ## Development
 
 ```bash
-pip install -e '.[test]' && pytest           # ~100 tests; KiCad/Freerouting/Pi tests skip if absent
+pip install -e '.[test]' && pytest           # ~120 tests; KiCad/Freerouting/Pi tests skip if absent
 npm install && npm run typecheck             # Pi extension against the real Pi type definitions
 pcbagent schema --write schemas              # after changing schemas or prompts (a test checks this)
 python scripts/make_sample_catalog.py        # regenerate the SAMPLE catalog
@@ -251,6 +275,7 @@ src/pcbagent/
   layout/                                   constraints, placer, Freerouting, SES, pipeline
   project.py cli.py fab.py doctor.py        state machine, CLI, fabrication outputs, checks
   agent/                                    shared prompts and the standalone loop
+  web/                                      `pcbagent serve`: local server, design bundle, board reader, chat page
 pi/extensions/pcbagent.ts                   Pi extension (tools, /design, auto-continue, Ollama provider)
 pi/skills/pcb-design/                       skill for normal chat
 pi/test/fake_model_server.py                scripted OpenAI-compatible model for end-to-end tests

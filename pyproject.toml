@@ -22,7 +22,8 @@ pcbagent = "pcbagent.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-pcbagent = ["data/*.json", "data/*.csv", "data/*.md", "kicad/plugin/*.py", "kicad/plugin/*.png", "schemas/*.json"]
+pcbagent = ["data/*.json", "data/*.csv", "data/*.md", "kicad/plugin/*.py", "kicad/plugin/*.png", "schemas/*.json",
+            "web/static/*.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

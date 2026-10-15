@@ -91,8 +91,10 @@ def build_items(circuit: Circuit, parts: dict | None, default_pkg: str) -> list[
     return items
 
 
-def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> dict:
+def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40, progress=None) -> dict:
+    """Place, route and DRC the verified design. ``progress(text)`` is called as each stage starts."""
     started = time.time()
+    say = progress or (lambda _text: None)
     spec, circuit, parts = project.require_verified()
     ground = spec["ground"]
     prefs = spec.get("preferences", {})
@@ -120,6 +122,7 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
             weights[net] = 1.0
 
     items = build_items(circuit, parts, default_pkg)
+    say(f"placing {len(items)} parts against {len(merged)} constraints")
     placed = place(items, merged, board_limits, seed=seed, net_weights=weights)
     issues = list(placed.issues)
     cons_report = []
@@ -170,6 +173,7 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
         return result
 
     try:
+        say(f"building the {placed.width:g} x {placed.height:g} mm board in KiCad")
         _run_worker({"action": "build", "board_path": str(board_path),
                      "origin": list(ORIGIN), "width": placed.width, "height": placed.height,
                      "nets": sorted(circuit.nets()), "footprints": fp_jobs, "rules": RULES,
@@ -187,6 +191,7 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
                                        layout_dir / f"{name}.kicad_sch")
         if sch:
             result["schematic"] = str(sch)
+        say("routing with Freerouting")
         fr = freerouting.route(dsn_path, ses_path, max_passes=max_passes)
         result["freerouting"] = {k: v for k, v in fr.items() if k != "command"}
         if not fr["ok"]:
@@ -194,6 +199,7 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40) -> 
             _finish(project, layout_dir, result, trace, started)
             return result
         drc_report = layout_dir / "drc.rpt"
+        say("importing the routes, pouring ground and running KiCad DRC")
         pour = {"net": ground, "layers": ["F.Cu", "B.Cu"], "clearance": 0.3} if data.get("pour_ground", True) \
             and ground in circuit.nets() else None
         routed = _run_worker({"action": "route", "board_path": str(board_path), "ses_path": str(ses_path),
