@@ -127,7 +127,8 @@ through placement, Freerouting and DRC. The right-hand side fills in as results 
 (hover a net, click a part, replay the placement and routing), the simulation results against the spec,
 the schematic, the BOM, and the KiCad and fabrication files to download. When the board is done you can
 keep chatting: ask why a part was chosen, or ask for a change, and the agent re-runs whatever the change
-needs.
+needs. If a run stops short (you pressed Stop, the attempt budget ran out, or the model stopped
+answering), press **Continue** or type "continue" to pick it up again.
 
 ![The browser chat finishing a design (here driven by the scripted test model)](docs/web-ui.png)
 
