@@ -77,7 +77,7 @@ class EventLog:
             ev = {"seq": self.last_seq + 1, "t": _now(), **event}
             line = json.dumps(ev, ensure_ascii=False) + "\n"
             try:
-                self.path.parent.mkdir(parents=True, exist_ok=True)
+                self.path.parent.mkdir(exist_ok=True)   # not parents: never re-create a deleted design folder
                 with self.path.open("ab+") as fh:
                     fh.seek(0, os.SEEK_END)
                     if fh.tell():
@@ -148,9 +148,12 @@ class Manager:
 
     def log_for(self, design_id: str) -> EventLog:
         root = self.design_root(design_id)
-        state = json.loads((root / STATE_FILE).read_text())
+        try:
+            state = json.loads((root / STATE_FILE).read_text(errors="replace"))
+        except (OSError, ValueError):
+            state = None
         # A folder deleted and re-created under the same name is a different design.
-        identity = (root.stat().st_ino, state.get("created"))
+        identity = (root.stat().st_ino, state.get("created") if isinstance(state, dict) else None)
         with self.lock:
             cached = self.logs.get(design_id)
             if cached and cached[0] == identity:
@@ -554,6 +557,15 @@ def make_handler(manager: Manager, token: str, port: int):
             self.send_header("Connection", "close")
             self.end_headers()
             self.close_connection = True
+            if seq > log.last_seq:
+                # This page saw events this server never wrote to disk (it restarted after a failed
+                # write): its numbering no longer matches, so tell it to load the history again.
+                try:
+                    self.wfile.write(b'data: {"type": "resync"}\n\n')
+                    self.wfile.flush()
+                except OSError:
+                    pass
+                return
             while not getattr(self.server, "stopping", False):
                 events = log.wait(seq, timeout=15)
                 chunk = []
@@ -587,22 +599,6 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     stopping = False
-    max_connections = 256
-
-    def __init__(self, *args, **kwargs):
-        self.slots = threading.BoundedSemaphore(self.max_connections)
-        super().__init__(*args, **kwargs)
-
-    def process_request(self, request, client_address):
-        # One thread per connection, but never without limit: refuse instead of exhausting threads and files.
-        if not self.slots.acquire(blocking=False):
-            self.shutdown_request(request)
-            return
-        try:
-            super().process_request(request, client_address)
-        except Exception:
-            self.slots.release()
-            raise
 
     def handle_error(self, request, client_address):
         import sys
@@ -610,12 +606,6 @@ class Server(ThreadingHTTPServer):
         if isinstance(exc, (OSError, ValueError)):   # a client hung up, timed out or was cut off
             return
         super().handle_error(request, client_address)
-
-    def process_request_thread(self, request, client_address):
-        try:
-            super().process_request_thread(request, client_address)
-        finally:
-            self.slots.release()
 
 
 def loopback_only(host: str, port: int) -> None:

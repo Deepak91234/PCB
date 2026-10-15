@@ -163,8 +163,9 @@ class Project:
 
         state["circuit_version"] += 1
         version = state["circuit_version"]
-        if state.get("layout"):
-            # The board was built from the previous circuit; it no longer describes this design.
+        lay = state.get("layout") or {}
+        if lay and lay.get("circuit_hash") != spec_mod.content_hash(circ.raw):
+            # The board was built from a different circuit; it no longer describes this design.
             self._event(state, "layout_invalidated", reason=f"circuit v{version} submitted")
             state["layout"] = None
         _write_json(self.path("circuit.json"), circ.raw)
@@ -195,7 +196,8 @@ class Project:
         result["summary"] = text + "\n" + parts["summary"]
         state["parts_ok"] = parts["passed"]
         if parts["passed"]:
-            state["phase"] = "layout"
+            # Resubmitting the circuit a board was built from keeps that board.
+            state["phase"] = "done" if (state.get("layout") or {}).get("passed") else "layout"
             result["passed"] = True
             self._event(state, "parts_selected", version=version, cost=parts.get("cost"))
         else:

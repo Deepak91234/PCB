@@ -87,7 +87,7 @@ class Agent:
 
     def save_transcript(self) -> None:
         path = self.transcript_path
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(exist_ok=True)   # not parents: a design folder deleted mid-run stays deleted
         tmp = path.with_suffix(".tmp")
         tmp.write_text(json.dumps({"model": self.model, "messages": self.messages}, ensure_ascii=False))
         tmp.replace(path)
@@ -157,17 +157,22 @@ class Agent:
                 msgs.append(m)
             data = self._post("/api/chat", {"model": self.model, "messages": msgs, "tools": tools, "stream": False,
                                             "options": {"num_ctx": self.num_ctx, "temperature": 0.2}})
+            if "message" not in data and data.get("error"):
+                raise ModelError(f"the model endpoint reported an error: {str(data['error'])[:300]}")
             msg = data["message"]
             calls = []
             for i, c in enumerate(msg.get("tool_calls") or []):
-                fn = c["function"]
+                # A malformed call becomes a call the loop rejects back to the model, not a crash.
+                fn = c.get("function") if isinstance(c, dict) and isinstance(c.get("function"), dict) else {}
                 args = fn.get("arguments")
                 calls.append({"id": f"call_{len(self.messages)}_{i}", "type": "function",
-                              "function": {"name": fn["name"],
-                                           "arguments": args if isinstance(args, str) else json.dumps(args)}})
+                              "function": {"name": str(fn.get("name") or ""),
+                                           "arguments": args if isinstance(args, str) else json.dumps(args or {})}})
             return {"role": "assistant", "content": msg.get("content") or "", "tool_calls": calls}
         data = self._post("/v1/chat/completions", {"model": self.model, "messages": self.messages, "stream": False,
                                                    "temperature": 0.2, "tools": tools})
+        if "choices" not in data and data.get("error"):
+            raise ModelError(f"the model endpoint reported an error: {str(data['error'])[:300]}")
         return data["choices"][0]["message"]
 
     # --- tools --------------------------------------------------------------
@@ -285,7 +290,9 @@ class Agent:
         idle = 0
         acted = False         # a state-changing tool ran in this turn
         settled = 0           # model turns since the design reached a finished state
-        lookups = 0           # consecutive tool batches that changed nothing
+        stalled = 0           # consecutive tool batches that made no progress (nothing ran, nothing changed)
+        pending_fix = False   # the last design change the model tried was rejected
+        fix_nudges = 0
         for turn in range(max_turns):
             if self.cancel.is_set():
                 return self._finish({"ok": False, "reason": "stopped by the user", "turns": turn})
@@ -311,7 +318,9 @@ class Agent:
                 self.emit("assistant", text=msg["content"].strip(), seconds=round(time.time() - t0, 1))
             if calls:
                 idle = 0
-                lookups = 0 if any((c.get("function") or {}).get("name") in ACTIONS for c in calls) else lookups + 1
+                before = self._progress_key()
+                batch_ok_action = False
+                batch_failed_action = False
                 for call in calls:
                     fn = call.get("function") or {}
                     name = str(fn.get("name") or "")
@@ -333,7 +342,8 @@ class Agent:
                             out, ok, facts = self._run_tool(name, args)
                             facts["seconds"] = round(time.time() - t1, 2)
                             if name in ACTIONS:
-                                acted = True
+                                batch_ok_action |= ok
+                                batch_failed_action |= not ok
                         self.log("       " + out.replace("\n", "\n       ")[:1500])
                         self.emit("tool_result", id=call_id, name=name, ok=ok, text=out[:4000], facts=facts,
                                   phase=self.project.state()["phase"])
@@ -341,6 +351,16 @@ class Agent:
                     self.messages.append({"role": "tool", "tool_call_id": call_id, "name": name,
                                           "content": out[:8000]})
                 self.save_transcript()
+                progressed = batch_ok_action or self._progress_key() != before
+                if progressed:
+                    acted, stalled = True, 0
+                else:
+                    stalled += 1
+                # A rejected change (invalid circuit, bad constraints, locked spec) leaves the design as it was.
+                if batch_ok_action:
+                    pending_fix = False
+                elif batch_failed_action:
+                    pending_fix = True
                 if self.cancel.is_set():
                     return self._finish({"ok": False, "reason": "stopped by the user", "turns": turn + 1})
                 finished, why = self.done()
@@ -350,10 +370,10 @@ class Agent:
                     settled += 1
                     if settled > 3:   # the model keeps looking things up after finishing
                         return self._finish({"ok": True, "reason": why, "turns": turn + 1})
-                if lookups >= LOOKUP_STOP:
-                    return self._finish({"ok": False, "reason": "the model kept looking things up without acting",
+                if stalled >= STALL_STOP:
+                    return self._finish({"ok": False, "reason": "the model kept calling tools without making progress",
                                          "turns": turn + 1})
-                if lookups == LOOKUP_NUDGE:
+                if stalled == STALL_NUDGE:
                     nudge = ("PCBAgent: you have looked things up several times in a row. Answer the user now, or "
                              "change the design with pcb_circuit or pcb_layout." if follow_up and not acted else
                              prompts.continue_prompt(self._relative_status(), self.max_circuit, self.max_layout))
@@ -362,6 +382,17 @@ class Agent:
                 # Otherwise let the model read the results: it writes its summary or acts again.
                 continue
             # A reply without tool calls.
+            if follow_up and pending_fix:
+                if fix_nudges < 2:
+                    # The model tried a change, it was rejected, and now it is talking instead of fixing it.
+                    fix_nudges += 1
+                    nudge = ("PCBAgent: your last design change was rejected (see the tool result above). Fix it and "
+                             "call the tool again, or tell the user plainly why the change cannot be made.")
+                    self.emit("nudge", text=nudge)
+                    self.messages.append({"role": "user", "content": nudge})
+                    continue
+                return self._finish({"ok": False, "reason": "the requested change was rejected; the design is unchanged",
+                                     "turns": turn + 1})
             if follow_up and not acted:
                 # The user asked something and the model answered without changing the design.
                 return self._finish({"ok": True, "reason": "replied", "turns": turn + 1})
@@ -378,6 +409,11 @@ class Agent:
         return self._finish({"ok": False, "reason": f"turn limit {max_turns} reached", "turns": max_turns})
 
 
+    def _progress_key(self) -> tuple:
+        """Changes when the design moves: a new phase, or a circuit or layout attempt spent."""
+        st = self.project.state()
+        return (st.get("phase"), st.get("circuit_attempts"), st.get("layout_attempts"), st.get("spec_hash"))
+
     def _relative_status(self) -> dict:
         """Design status with attempt counts for this turn, matching the per-turn budgets."""
         status = self.project.status()
@@ -387,8 +423,8 @@ class Agent:
 
 
 ACTIONS = {"pcb_spec", "pcb_circuit", "pcb_layout"}   # tools that change the design
-LOOKUP_NUDGE = 6    # consecutive look-up-only tool batches before PCBAgent says "act or answer"
-LOOKUP_STOP = 10    # ... and before it gives up on the turn
+STALL_NUDGE = 6     # consecutive tool batches without progress before PCBAgent says "act or answer"
+STALL_STOP = 10     # ... and before it gives up on the turn (look-ups, rejected or unreadable calls, crashed tools)
 
 
 class ModelError(OSError):

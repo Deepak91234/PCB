@@ -98,7 +98,6 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40, pro
     say = progress or (lambda _text: None)
     spec, circuit, parts = project.require_verified()
     circuit_hash = project.state().get("verified_circuit_hash")
-    project.begin_layout()
     ground = spec["ground"]
     prefs = spec.get("preferences", {})
     default_pkg = prefs.get("passive_package", "0603")
@@ -176,6 +175,9 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40, pro
         return result
 
     try:
+        # From here on the board files are overwritten: forget the old board first, so an
+        # interrupted attempt never leaves a half-written board marked DRC clean.
+        project.begin_layout()
         say(f"building the {placed.width:g} x {placed.height:g} mm board in KiCad")
         _run_worker({"action": "build", "board_path": str(board_path),
                      "origin": list(ORIGIN), "width": placed.width, "height": placed.height,

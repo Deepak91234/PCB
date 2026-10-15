@@ -235,7 +235,9 @@ th { text-align: left; font: 600 0.68rem/1.2 var(--body); letter-spacing: 0.08em
 td { padding: 9px 11px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 tr:last-child td { border-bottom: 0; }
 td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
-.vtable { min-width: 560px; } .btable { min-width: 600px; }
+.vtable { min-width: 560px; } .btable { min-width: 0; }
+.btable th { white-space: normal; }
+.btable td:nth-child(3) { min-width: 9em; }
 .req .pill { margin-right: 4px; vertical-align: 1px; }
 .req b { display: block; font: 500 0.84rem var(--mono); }
 .req span { color: var(--muted); font-size: 0.8rem; }
@@ -297,6 +299,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   .app[data-view="chat"] .results, .app[data-view="results"] .chat { display: none; }
   .chat { border-right: 0; }
   .menu-btn { display: none; }
+  .tabs { flex-wrap: wrap; }
   .thread { padding: 14px 14px 8px; }
   .results { padding: 0 max(14px, env(safe-area-inset-left, 0px)) 24px; }
   .chathead { padding: 10px 14px; }
@@ -496,14 +499,15 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     try { const d = await api.get("/api/designs"); S.designs = d.designs; S.running = d.running; } catch (e) { /* keep last list */ }
     // The open design's run ended without this page hearing it (e.g. the server restarted): resync.
     if (S.current && before === S.current && S.running !== S.current) scheduleRefresh(50);
-    renderDesigns(); updateComposer();
+    if (before !== S.running && typeof schedulePoll === "function") schedulePoll();
+    renderDesigns(); updateComposer(); syncContinue();
   }
   function phaseDot(d) {
     if (S.running === d.id) return "run";
     if (d.passed || d.phase === "done") return "ok";
     return "warn";
   }
-  const PHASE_TEXT = { spec: "writing the spec", circuit: "designing the circuit", layout: "circuit verified", done: "board routed" };
+  const PHASE_TEXT = { spec: "no spec yet", circuit: "circuit not verified yet", layout: "circuit verified", done: "board routed" };
   function renderDesigns() {
     const nav = $("dlist");
     if (!S.designs.length) { nav.innerHTML = `<p class="empty-list">No designs yet. Describe a board to start one.</p>`; return; }
@@ -541,6 +545,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     es.onmessage = (m) => {
       if (S.current !== id) return;
       let ev; try { ev = JSON.parse(m.data); } catch (_) { return; }
+      if (ev.type === "resync") { openDesign(id); return; }
       if (ev.seq <= S.lastSeq) return;
       S.lastSeq = ev.seq;
       renderEvent(ev, ev.seq > S.histCount);
@@ -676,12 +681,13 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
       Object.values(S.cards).forEach((c) => { const ico = c.querySelector(".step-ico.run"); if (ico) { ico.className = "step-ico stop"; ico.textContent = "–"; } });
       const what = ev.reason === "replied" ? "Answered" : ev.ok ? `Finished: ${esc(ev.reason || "")}` : `Stopped: ${esc(ev.reason || "")}`;
       const note = add(`<span class="dot ${ev.ok ? "ok" : "warn"}"></span>${what}${ev.turns ? ` · ${num(ev.turns)} model turn${ev.turns === 1 ? "" : "s"}` : ""}`, "note end");
-      if (!ev.ok) {
-        // A run that stopped short (Stop, budget, interruption, model error) can be picked up again.
+      {
+        // Shown while the design is unfinished and idle (see syncContinue): Stop, budget, interruption, a question.
         const btn = document.createElement("button");
         btn.type = "button"; btn.className = "linkbtn"; btn.dataset.act = "continue"; btn.textContent = "Continue";
         btn.addEventListener("click", () => send("Continue the design.", true));
         note.appendChild(btn);
+        syncContinue();
       }
       if (live) { S.running = null; scheduleRefresh(50); loadDesigns(); }
     }
@@ -781,7 +787,8 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     renderPhases();
     const b = S.bundle;
     // Re-draw the board only when it changed, so a refresh does not reset zoom, selection or a replay.
-    const sig = b ? [b.id, b.board ? JSON.stringify(b.board).length : 0, b.layout ? b.layout.elapsed : "", b.parts ? b.parts.bom.length : 0, b.verification ? b.verification.circuit_version : "", b.phase, S.running === b.id, b.layout_stale].join(":") : "";
+    const sig = !b ? "" : b.board ? [b.id, JSON.stringify(b.board).length, b.layout ? b.layout.elapsed : "", b.parts ? b.parts.bom.length : 0].join(":")
+      : [b.id, "none", b.phase, S.running === b.id, b.layout_stale, b.verification ? b.verification.circuit_version : "", b.layout ? b.layout.message : ""].join(":");
     const changed = sig !== S.boardSig;
     if (changed) { S.boardSig = sig; renderBoardPane(); }
     renderSimPane(); renderSchPane(); renderPartsPane(); renderFilesPane();
@@ -1130,7 +1137,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     if (!D || !D.parts) { pane.innerHTML = placeholder("No parts chosen yet", "Parts are picked from your local catalog after the circuit passes simulation."); return; }
     const P = D.parts, c = P.cost || {};
     let rows = `<thead><tr><th>Refs</th><th>Value</th><th>Part</th><th>LCSC</th><th class="n">Stock</th><th class="n">Each</th><th class="n">Qty</th></tr></thead><tbody>`;
-    for (const l of P.bom) rows += `<tr><td class="mono" style="color:var(--accent)">${esc(l.refs.join(", "))}</td><td>${esc(l.value)}</td><td>${esc(l.mpn)} <span class="muted small">${esc(l.manufacturer)}</span><br><span class="muted small mono">${esc(l.footprint)}</span></td><td class="mono small">${esc(l.lcsc)}<br>${l.library_type === "basic" ? '<span class="pill">basic</span>' : `<span class="pill warn">${esc(l.library_type || "")}</span>`}</td><td class="n">${Number(l.stock).toLocaleString("en-US")}</td><td class="n">${money(l.price)}</td><td class="n">${num(l.qty)}</td></tr>`;
+    for (const l of P.bom) rows += `<tr><td class="mono" style="color:var(--accent)">${esc(l.refs.join(", "))}</td><td>${esc(l.value)}</td><td>${esc(l.mpn)}<br><span class="muted small">${esc(l.manufacturer)}</span><br><span class="muted small mono" style="overflow-wrap:anywhere">${esc(l.footprint)}</span></td><td class="mono small">${esc(l.lcsc)}<br>${l.library_type === "basic" ? '<span class="pill">basic</span>' : `<span class="pill warn">${esc(l.library_type || "")}</span>`}</td><td class="n">${Number(l.stock).toLocaleString("en-US")}</td><td class="n">${money(l.price)}</td><td class="n">${num(l.qty)}</td></tr>`;
     pane.innerHTML = `${P.sample ? `<div class="setup"><p>These part numbers come from the <b>sample catalog</b> and are not real. Run <code>pcbagent catalog update</code> for the real JLCPCB list.</p></div>` : ""}
       <div class="tablebox"><table class="btable">${rows}</tbody></table></div>
       <div class="costline"><span>Parts for ${num(P.boards)} boards <b>${money(c.parts_usd)}</b></span>${c.extended_parts ? `<span>Extended-part setup fees about <b>${money(c.extended_fees_usd_estimate)}</b></span>` : ""}<span>${esc(c.note || "")}</span></div>
@@ -1182,8 +1189,9 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
 
   loadHealth(false);
   loadDesigns().then(route);
-  // Poll often while another design is running (to free the composer promptly), rarely otherwise.
-  (function poll() { setTimeout(() => { loadDesigns().finally(poll); }, S.running && S.running !== S.current ? 3000 : 15000); })();
+  // Poll every 3 s while any design runs (so the composer frees up promptly), every 15 s otherwise.
+  function schedulePoll() { clearTimeout(S.pollTimer); S.pollTimer = setTimeout(() => { loadDesigns().finally(schedulePoll); }, S.running ? 3000 : 15000); }
+  schedulePoll();
 })();
 </script>
 </body>

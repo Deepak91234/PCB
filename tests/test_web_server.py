@@ -237,12 +237,22 @@ def test_tool_errors_go_back_to_the_model(tmp_path, monkeypatch):
             assert msgs[i + 1]["role"] == "tool"
 
 
-def test_missing_closing_summary_does_not_fail_a_finished_design(tmp_path):
+def test_missing_closing_summary_does_not_fail_a_finished_design(tmp_path, monkeypatch):
     from pcbagent.agent.loop import ModelError
     p = _project_in(tmp_path, "done")
-    agent, events = _scripted(p, [_call("pcb_spec", {"title": "x"}), ModelError("connection refused")])
-    result = agent.reply("lock a new spec")   # the spec is locked: the tool refuses, the design stays done
+    agent, events = _scripted(p, [_call("pcb_layout", {"constraints": []}), ModelError("connection refused")])
+    monkeypatch.setattr(agent, "_call_tool", lambda n, a: ("PASS: board routed", True, {}))  # a re-layout that passes
+    result = agent.reply("move J1 a bit")
     assert result["ok"] and events[-1]["type"] == "done" and events[-1]["ok"]
+
+
+def test_rejected_change_is_reported_as_not_made(tmp_path):
+    p = _project_in(tmp_path, "done")
+    agent, events = _scripted(p, [_call("pcb_spec", {}), _text("Done!"), _text("Done!"), _text("Done!")])
+    result = agent.reply("make the output 5 V")
+    assert result["ok"] is False and "rejected" in result["reason"]
+    assert len([e for e in events if e["type"] == "nudge"]) == 2
+    assert p.state()["phase"] == "done"
 
 
 def test_event_log_survives_damaged_lines_and_marks_interrupted_runs(tmp_path):
@@ -357,10 +367,20 @@ def test_chat_designs_a_board_end_to_end(server):
     status, data, _ = call(server, "POST", f"/api/designs/{design_id}/fab", {})
     assert status == 200 and any(f.endswith(".zip") for f in data["files"])
 
-    # A new circuit makes the board stale: it is no longer shown or exported as current.
+    # A rejected re-layout (bad constraints) and an unchanged circuit both keep the finished board.
     from conftest import load_example
+    from pcbagent.layout import pipeline
+    from pcbagent.layout.constraints import ConstraintError
     from pcbagent.project import Project
     p = Project.open(server["manager"].designs / design_id)
+    with pytest.raises(ConstraintError):
+        pipeline.run(p, {"constraints": [{"type": "near", "ref": "NOPE", "to": "R1"}]})
+    assert p.state()["phase"] == "done" and p.current_layout()
+    assert p.submit_circuit(load_example("divider", "circuit"))["passed"]
+    assert p.state()["phase"] == "done" and p.current_layout()
+    assert call(server, "GET", f"/api/designs/{design_id}", token=False)[1]["board"]
+
+    # A new circuit makes the board stale: it is no longer shown or exported as current.
     changed = load_example("divider", "circuit")
     for c in changed["components"]:
         if c["ref"] == "R2":
@@ -395,8 +415,8 @@ def test_follow_up_that_only_looks_things_up_is_cut_short(tmp_path):
     p = _project_in(tmp_path, "done")
     agent, events = _scripted(p, [_call("pcb_status", {})] * 20)
     result = agent.reply("Which resistors are in stock?")
-    assert not result["ok"] and "looking things up" in result["reason"]
-    assert agent.calls == loop.LOOKUP_STOP
+    assert not result["ok"] and "without making progress" in result["reason"]
+    assert agent.calls == loop.STALL_STOP
     assert len([e for e in events if e["type"] == "nudge"]) == 1
 
 
@@ -438,3 +458,25 @@ def test_slow_clients_are_dropped_after_the_header_deadline(server):
     assert data == b"" or data.startswith(b"HTTP/1.0 4")
     assert time.time() - start < srv.HEADER_DEADLINE + 5
     s.close()
+
+
+def test_deleted_or_damaged_designs_are_left_alone(tmp_path):
+    import shutil
+    from pcbagent.project import Project
+    from pcbagent.web.server import EventLog, Manager
+    gone = Project.create(tmp_path / "designs" / "gone", "x")
+    log = EventLog(gone.root / "agent" / "events.jsonl")
+    shutil.rmtree(gone.root)
+    log.append({"type": "assistant", "text": "still talking"})   # must not re-create the folder
+    assert not gone.root.exists()
+    bad = Project.create(tmp_path / "designs" / "bad", "x")
+    (bad.root / "pcbagent.json").write_text("[1, 2")
+    manager = Manager(tmp_path / "designs", "m", "http://127.0.0.1:9")
+    assert manager.log_for("bad").events == []
+
+
+def test_a_page_ahead_of_the_server_is_told_to_reload(server):
+    from pcbagent.project import Project
+    Project.create(server["manager"].designs / "d", "x")
+    with urllib.request.urlopen(f"{server['base']}/api/designs/d/events?after=99", timeout=10) as resp:
+        assert json.loads(resp.readline().decode()[6:]) == {"type": "resync"}
