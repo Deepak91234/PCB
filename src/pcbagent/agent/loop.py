@@ -248,8 +248,13 @@ class Agent:
         self.save_transcript()
         return self._loop(max_turns)
 
-    def reply(self, text: str, max_turns: int = 80) -> dict:
-        """Continue the conversation with a follow-up from the user."""
+    def reply(self, text: str, max_turns: int = 80, resume: bool = False) -> dict:
+        """Continue the conversation with a follow-up from the user.
+
+        A follow-up is a question or a change request: if the model answers without changing the
+        design, the turn ends. ``resume=True`` ("continue", or the page's Continue button) instead
+        keeps pushing the model until the design is finished, like the first run.
+        """
         if not self.messages and not self.load_transcript():
             # A design started elsewhere (Pi, or before transcripts existed): give the model the context afresh.
             request = self.project.state().get("request") or text
@@ -259,7 +264,7 @@ class Agent:
             ]
         self.messages.append({"role": "user", "content": prompts.follow_up(text, self.project.status())})
         self.save_transcript()
-        return self._loop(max_turns, follow_up=True)
+        return self._loop(max_turns, follow_up=not resume)
 
     def _finish(self, result: dict) -> dict:
         self.save_transcript()
@@ -280,6 +285,7 @@ class Agent:
         idle = 0
         acted = False         # a state-changing tool ran in this turn
         settled = 0           # model turns since the design reached a finished state
+        lookups = 0           # consecutive tool batches that changed nothing
         for turn in range(max_turns):
             if self.cancel.is_set():
                 return self._finish({"ok": False, "reason": "stopped by the user", "turns": turn})
@@ -305,6 +311,7 @@ class Agent:
                 self.emit("assistant", text=msg["content"].strip(), seconds=round(time.time() - t0, 1))
             if calls:
                 idle = 0
+                lookups = 0 if any((c.get("function") or {}).get("name") in ACTIONS for c in calls) else lookups + 1
                 for call in calls:
                     fn = call.get("function") or {}
                     name = str(fn.get("name") or "")
@@ -343,6 +350,15 @@ class Agent:
                     settled += 1
                     if settled > 3:   # the model keeps looking things up after finishing
                         return self._finish({"ok": True, "reason": why, "turns": turn + 1})
+                if lookups >= LOOKUP_STOP:
+                    return self._finish({"ok": False, "reason": "the model kept looking things up without acting",
+                                         "turns": turn + 1})
+                if lookups == LOOKUP_NUDGE:
+                    nudge = ("PCBAgent: you have looked things up several times in a row. Answer the user now, or "
+                             "change the design with pcb_circuit or pcb_layout." if follow_up and not acted else
+                             prompts.continue_prompt(self._relative_status(), self.max_circuit, self.max_layout))
+                    self.emit("nudge", text=nudge.splitlines()[0])
+                    self.messages.append({"role": "user", "content": nudge})
                 # Otherwise let the model read the results: it writes its summary or acts again.
                 continue
             # A reply without tool calls.
@@ -355,17 +371,24 @@ class Agent:
             idle += 1
             if idle > 3:
                 return self._finish({"ok": False, "reason": "the model stopped calling tools", "turns": turn + 1})
-            status = self.project.status()
-            status["circuit_attempts"] -= self._base[0]
-            status["layout_attempts"] -= self._base[1]
-            nudge = prompts.continue_prompt(status, self.max_circuit, self.max_layout)
+            nudge = prompts.continue_prompt(self._relative_status(), self.max_circuit, self.max_layout)
             self.log("[pcbagent] " + nudge.splitlines()[0])
             self.emit("nudge", text=nudge.splitlines()[0])
             self.messages.append({"role": "user", "content": nudge})
         return self._finish({"ok": False, "reason": f"turn limit {max_turns} reached", "turns": max_turns})
 
 
+    def _relative_status(self) -> dict:
+        """Design status with attempt counts for this turn, matching the per-turn budgets."""
+        status = self.project.status()
+        status["circuit_attempts"] -= self._base[0]
+        status["layout_attempts"] -= self._base[1]
+        return status
+
+
 ACTIONS = {"pcb_spec", "pcb_circuit", "pcb_layout"}   # tools that change the design
+LOOKUP_NUDGE = 6    # consecutive look-up-only tool batches before PCBAgent says "act or answer"
+LOOKUP_STOP = 10    # ... and before it gives up on the turn
 
 
 class ModelError(OSError):

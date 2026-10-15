@@ -20,10 +20,12 @@ DOWNLOADS = ("bom_jlcpcb.csv", "{name}.net", "{name}.kicad_sch", "layout/{name}.
 
 
 def _load(path: Path):
+    """A JSON object from a design file, or None if it is missing, unreadable or not an object."""
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text(errors="replace"))
     except (OSError, ValueError):
         return None
+    return data if isinstance(data, dict) else None
 
 
 def _r(v, n=9):
@@ -33,7 +35,7 @@ def _r(v, n=9):
 def _current_layout(state: dict) -> dict | None:
     """The recorded layout attempt if it belongs to the current verified circuit (passed or not)."""
     lay = state.get("layout")
-    if not lay:
+    if not isinstance(lay, dict) or not lay:
         return None
     if lay.get("circuit_hash") and lay["circuit_hash"] != state.get("verified_circuit_hash"):
         return None
@@ -45,18 +47,27 @@ def summary(root: Path) -> dict:
     state = _load(root / STATE_FILE) or {}
     spec = _load(root / "spec.json") or {}
     lay = _current_layout(state) or {}
-    board_mm = lay.get("board_mm")
+    try:
+        board_mm = [float(x) for x in lay.get("board_mm")][:2]
+        board_mm = board_mm if len(board_mm) == 2 else None
+    except (TypeError, ValueError):
+        board_mm = None
     return {"id": root.name, "title": str(spec.get("title") or state.get("request") or root.name),
             "request": str(state.get("request", "")), "phase": state.get("phase"), "created": state.get("created"),
             "updated": (root / STATE_FILE).stat().st_mtime if (root / STATE_FILE).exists() else None,
-            "passed": bool(lay.get("passed")),
-            "board_mm": [float(x) for x in board_mm] if isinstance(board_mm, list) and len(board_mm) == 2 else None}
+            "passed": bool(lay.get("passed")), "board_mm": board_mm}
 
 
 def list_designs(base: Path) -> list[dict]:
     if not base.is_dir():
         return []
-    out = [summary(p.parent) for p in base.glob(f"*/{STATE_FILE}")]
+    out = []
+    for p in base.glob(f"*/{STATE_FILE}"):
+        try:
+            out.append(summary(p.parent))
+        except Exception:  # noqa: BLE001 - one damaged folder must not hide the others
+            out.append({"id": p.parent.name, "title": p.parent.name, "request": "", "phase": None, "created": None,
+                        "updated": None, "passed": False, "board_mm": None, "damaged": True})
     return sorted(out, key=lambda d: d["updated"] or 0, reverse=True)
 
 
@@ -141,8 +152,8 @@ def sanitize_svg(text: str) -> str:
     """Drop anything in an SVG that could run or fetch: scripts, event handlers, foreign content, links."""
     text = re.sub(r"<script.*?</script\s*>", "", text, flags=re.S | re.I)
     text = re.sub(r"<foreignObject.*?</foreignObject\s*>", "", text, flags=re.S | re.I)
-    text = re.sub(r"""\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", "", text, flags=re.I)
-    return re.sub(r"""\s(?:xlink:)?href\s*=\s*("[^"]*"|'[^']*')""", "", text, flags=re.I)
+    text = re.sub(r"""[\s/]on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", " ", text, flags=re.I)
+    return re.sub(r"""[\s/](?:xlink:)?href\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", " ", text, flags=re.I)
 
 
 def schematic_svg(root: Path, name: str) -> str | None:

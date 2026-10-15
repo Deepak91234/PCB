@@ -38,6 +38,10 @@ STATIC = Path(__file__).resolve().parent / "static"
 MAX_BODY = 64 * 1024
 DESIGN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,99}")
 REQUIRED_TOOLS = ("ngspice", "kicad-cli", "kicad python", "footprint library", "java", "freerouting")
+# "continue", "keep going", "try again": the user wants the unfinished design finished, not an answer.
+RESUME = re.compile(r"^\s*(please\s+)?(continue|go on|keep going|carry on|resume|try again|retry|proceed|go ahead|"
+                    r"finish(\s+(it|the\s+(design|board)))?)\b", re.I)
+HEADER_DEADLINE = 10.0   # seconds a client gets to send a complete request line and headers
 
 
 def _now() -> str:
@@ -156,7 +160,7 @@ class Manager:
             busy_here = self.busy == design_id
         if not busy_here and log.interrupted():
             log.append({"type": "error", "text": "This run was interrupted: the server stopped while it was running. "
-                                                 "Send a message to continue."})
+                                                 "Press Continue, or send a message."})
             log.append({"type": "done", "ok": False, "reason": "interrupted"})
         return log
 
@@ -245,11 +249,13 @@ class Manager:
             raise
         return design_id
 
-    def reply(self, design_id: str, text: str, model: str | None = None) -> None:
+    def reply(self, design_id: str, text: str, model: str | None = None, resume: bool | None = None) -> None:
         text = text.strip()
         if not text:
             raise ValueError("write a message")
         root = self.design_root(design_id)
+        if resume is None:
+            resume = bool(RESUME.match(text))
         model = model or self._last_model(design_id) or self.model
         self.check_ready(model)
         with self.lock:
@@ -258,7 +264,8 @@ class Manager:
             run_id = self._reserve(design_id)
         try:
             self.log_for(design_id).append({"type": "user", "text": text, "model": model})
-            self._launch(design_id, run_id, Project.open(root), model, lambda agent: agent.reply(text))
+            self._launch(design_id, run_id, Project.open(root), model,
+                         lambda agent: agent.reply(text, resume=bool(resume)))
         except BaseException:
             self._release(design_id, run_id)
             raise
@@ -356,8 +363,35 @@ def make_handler(manager: Manager, token: str, port: int):
 
     class Handler(BaseHTTPRequestHandler):
         server_version = f"pcbagent/{__version__}"
-        protocol_version = "HTTP/1.1"
-        timeout = 30  # drop connections that never finish a request (the event stream writes every 15 s)
+        # One request per connection: no idle keep-alive connections holding a slot.
+        protocol_version = "HTTP/1.0"
+        timeout = 30  # drop connections that stop talking (the event stream writes every 15 s)
+        header_deadline = HEADER_DEADLINE
+
+        def setup(self):
+            super().setup()
+            # A client that trickles a request byte by byte would never hit the socket timeout;
+            # give it a fixed time to finish its request line and headers, then hang up.
+            self._headers_done = threading.Event()
+            self._watchdog = threading.Timer(self.header_deadline, self._expire)
+            self._watchdog.daemon = True
+            self._watchdog.start()
+
+        def _expire(self):
+            if not self._headers_done.is_set():
+                try:
+                    self.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass
+
+        def parse_request(self):
+            ok = super().parse_request()   # has read the headers by now
+            self._headers_done.set()
+            return ok
+
+        def finish(self):
+            self._watchdog.cancel()
+            super().finish()
 
         def log_message(self, fmt, *args):  # keep the terminal for the URL and errors
             pass
@@ -470,7 +504,9 @@ def make_handler(manager: Manager, token: str, port: int):
                     design_id, action = parts[2], parts[3]
                     manager.design_root(design_id)
                     if action == "messages":
-                        manager.reply(design_id, str(body.get("text", "")), body.get("model") or None)
+                        resume = body.get("resume")
+                        manager.reply(design_id, str(body.get("text", "")), body.get("model") or None,
+                                      resume if isinstance(resume, bool) else None)
                         return self._json({"ok": True}, 202)
                     if action == "stop":
                         return self._json({"ok": manager.stop(design_id)})
@@ -551,7 +587,7 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     stopping = False
-    max_connections = 64
+    max_connections = 256
 
     def __init__(self, *args, **kwargs):
         self.slots = threading.BoundedSemaphore(self.max_connections)
@@ -567,6 +603,13 @@ class Server(ThreadingHTTPServer):
         except Exception:
             self.slots.release()
             raise
+
+    def handle_error(self, request, client_address):
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (OSError, ValueError)):   # a client hung up, timed out or was cut off
+            return
+        super().handle_error(request, client_address)
 
     def process_request_thread(self, request, client_address):
         try:

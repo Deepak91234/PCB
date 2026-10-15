@@ -116,10 +116,10 @@ def test_requests_for_other_hosts_are_refused(server):
     # A DNS-rebinding page would reach us with its own host name in the Host header.
     resp = raw_request(server, f"GET /api/designs HTTP/1.1\r\nHost: evil.example:{server['port']}\r\n"
                                f"Connection: close\r\n\r\n".encode())
-    assert resp.startswith(b"HTTP/1.1 403")
+    assert resp.split(b"\r\n")[0].split()[1] == b"403"
     ok = raw_request(server, f"GET /api/designs HTTP/1.1\r\nHost: localhost:{server['port']}\r\n"
                              f"Connection: close\r\n\r\n".encode())
-    assert ok.startswith(b"HTTP/1.1 200")
+    assert ok.split(b"\r\n")[0].split()[1] == b"200"
 
 
 def test_writes_need_the_token_same_origin_and_json(server):
@@ -387,3 +387,54 @@ def test_relayout_forgets_the_old_board_first(tmp_path):
     assert st["layout"] is None and st["phase"] == "layout" and p.current_layout() is None
     b = bundle.design_bundle(p.root)
     assert b["layout"] is None and b["board"] is None and b["layout_stale"] and not b["passed"]
+
+
+
+def test_follow_up_that_only_looks_things_up_is_cut_short(tmp_path):
+    from pcbagent.agent import loop
+    p = _project_in(tmp_path, "done")
+    agent, events = _scripted(p, [_call("pcb_status", {})] * 20)
+    result = agent.reply("Which resistors are in stock?")
+    assert not result["ok"] and "looking things up" in result["reason"]
+    assert agent.calls == loop.LOOKUP_STOP
+    assert len([e for e in events if e["type"] == "nudge"]) == 1
+
+
+def test_continue_resumes_an_unfinished_design_but_a_question_does_not(tmp_path):
+    from pcbagent.web.server import RESUME
+    assert RESUME.match("Please continue.") and RESUME.match("try again") and RESUME.match("Finish the board")
+    assert not RESUME.match("Why did it stop?") and not RESUME.match("continuity of GND?")
+    p = _project_in(tmp_path, "circuit")
+    agent, events = _scripted(p, [_text("I will think about it.")] * 5)
+    result = agent.reply("Continue the design.", resume=True)
+    assert result["reason"] == "the model stopped calling tools"   # it was pushed on, not just answered
+    assert len([e for e in events if e["type"] == "nudge"]) == 3
+
+
+def test_damaged_design_folders_do_not_break_the_list(tmp_path):
+    from pcbagent.project import Project
+    from pcbagent.web import bundle
+    good = Project.create(tmp_path / "good", "a regulator")
+    odd = Project.create(tmp_path / "odd", "x")
+    st = odd.state()
+    st["layout"] = {"passed": True, "board_mm": [None, "<img src=x onerror=alert(1)>"]}
+    odd.save_state(st)
+    (tmp_path / "broken").mkdir()
+    (tmp_path / "broken" / "pcbagent.json").write_text("[1, 2")
+    designs = {d["id"]: d for d in bundle.list_designs(tmp_path)}
+    assert set(designs) == {"good", "odd", "broken"} and designs["odd"]["board_mm"] is None
+    assert designs["good"]["title"] == "a regulator"
+    assert bundle.design_bundle(odd.root)["id"] == "odd" and bundle.design_bundle(good.root)["phase"] == "spec"
+
+
+def test_slow_clients_are_dropped_after_the_header_deadline(server):
+    import pcbagent.web.server as srv
+    assert srv.HEADER_DEADLINE <= 15
+    s = socket.create_connection(("127.0.0.1", server["port"]), timeout=30)
+    s.sendall(b"GET / HT")      # never finishes the request line
+    start = time.time()
+    s.settimeout(srv.HEADER_DEADLINE + 10)
+    data = s.recv(100)          # the server hangs up instead of waiting forever
+    assert data == b"" or data.startswith(b"HTTP/1.0 4")
+    assert time.time() - start < srv.HEADER_DEADLINE + 5
+    s.close()

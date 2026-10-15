@@ -103,6 +103,7 @@ code, .mono { font-family: var(--mono); font-size: 0.86em; }
 .linkbtn { border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 3px 10px; font-size: 0.82rem; font-weight: 600; }
 .linkbtn:hover { border-color: var(--muted); }
 .note { justify-self: center; font-size: 0.8rem; color: var(--muted); text-align: center; max-width: 90%; }
+.note.end .linkbtn { margin-left: 4px; }
 .note.end { display: flex; align-items: center; gap: 8px; color: var(--ink); background: var(--surface); border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; }
 .err { justify-self: stretch; background: var(--bad-soft); color: var(--ink); border-radius: var(--r); padding: 10px 12px; font-size: 0.9rem; overflow-wrap: anywhere; }
 .err b { color: var(--bad); }
@@ -459,7 +460,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   function setupProblems() {
     const h = S.health; if (!h) return ["The server did not answer the setup check."];
     const p = [];
-    if (h.missing_tools.length) p.push(`Missing tools: ${h.missing_tools.join(", ")}. Run <code>pcbagent doctor</code> for details.`);
+    if (h.missing_tools.length) p.push(`Missing tools: ${esc(h.missing_tools.join(", "))}. Run <code>pcbagent doctor</code> for details.`);
     if (!h.catalog.present) p.push(`No parts catalog. Run <code>pcbagent catalog update</code>, or <code>pcbagent catalog sample</code> for a demo with fake parts.`);
     if (!h.ollama.reachable) p.push(`Ollama is not reachable at ${esc(h.ollama.host)}. Start it with <code>ollama serve</code>.`);
     else if (!h.ollama.models.length) p.push(`Ollama has no models. Run <code>ollama pull ${esc(h.model)}</code>.`);
@@ -480,7 +481,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     if (h) {
       body.push(`<ul class="checks">`);
       for (const t of h.tools) body.push(`<li><span>${t.ok ? "✓" : "✗"}</span><span>${esc(t.name)}</span><span class="d">${esc(t.detail)}</span></li>`);
-      body.push(`<li><span>${h.catalog.present ? (h.catalog.sample ? "!" : "✓") : "✗"}</span><span>parts catalog</span><span class="d">${h.catalog.present ? `${h.catalog.parts} parts${h.catalog.sample ? " (sample catalog with fake part numbers)" : ""}` : "not installed"}</span></li>`);
+      body.push(`<li><span>${h.catalog.present ? (h.catalog.sample ? "!" : "✓") : "✗"}</span><span>parts catalog</span><span class="d">${h.catalog.present ? `${num(h.catalog.parts)} parts${h.catalog.sample ? " (sample catalog with fake part numbers)" : ""}` : "not installed"}</span></li>`);
       body.push(`<li><span>${h.ollama.reachable ? "✓" : "✗"}</span><span>Ollama</span><span class="d">${h.ollama.reachable ? `${esc(h.ollama.host)} · ${h.ollama.models.length} model(s)` : esc(h.ollama.error || "not reachable")}</span></li>`);
       body.push(`</ul><p class="small muted">Designs are saved in <code>${esc(h.designs_dir)}</code>. PCBAgent ${esc(h.version)}.</p>`);
     }
@@ -559,6 +560,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
       const changed = renderResults();
       if (changed && b.board && S.autoReplay) { S.autoReplay = false; selectTab("board"); setTimeout(replay, 300); }
       if (!b.running) hideThinking();
+      syncContinue();
       updateComposer();
     } catch (e) {
       if (e.status === 404) { location.hash = ""; }
@@ -659,7 +661,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     const t = ev.type;
     const stick = !live || nearBottom();
     if (t !== "thinking" && t !== "progress") hideThinking();
-    if (t === "user") { add(esc(ev.text), "msg user"); if (live) scrollThread(true); }
+    if (t === "user") { document.querySelectorAll('[data-act="continue"]').forEach((b) => b.remove()); add(esc(ev.text), "msg user"); if (live) scrollThread(true); }
     else if (t === "run_start") { S.runModel = ev.model || S.runModel; }
     else if (t === "thinking") { if (live || (ev.seq === S.histCount && S.bundle && S.bundle.running)) showThinking(ev.model || S.runModel, live ? Date.now() : Date.parse(ev.t)); }
     else if (t === "assistant") add(`<span class="who">${esc(S.runModel)}</span>${md(ev.text)}`, "msg agent");
@@ -673,7 +675,14 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     else if (t === "done") {
       Object.values(S.cards).forEach((c) => { const ico = c.querySelector(".step-ico.run"); if (ico) { ico.className = "step-ico stop"; ico.textContent = "–"; } });
       const what = ev.reason === "replied" ? "Answered" : ev.ok ? `Finished: ${esc(ev.reason || "")}` : `Stopped: ${esc(ev.reason || "")}`;
-      add(`<span class="dot ${ev.ok ? "ok" : "warn"}"></span>${what}${ev.turns ? ` · ${num(ev.turns)} model turn${ev.turns === 1 ? "" : "s"}` : ""}`, "note end");
+      const note = add(`<span class="dot ${ev.ok ? "ok" : "warn"}"></span>${what}${ev.turns ? ` · ${num(ev.turns)} model turn${ev.turns === 1 ? "" : "s"}` : ""}`, "note end");
+      if (!ev.ok) {
+        // A run that stopped short (Stop, budget, interruption, model error) can be picked up again.
+        const btn = document.createElement("button");
+        btn.type = "button"; btn.className = "linkbtn"; btn.dataset.act = "continue"; btn.textContent = "Continue";
+        btn.addEventListener("click", () => send("Continue the design.", true));
+        note.appendChild(btn);
+      }
       if (live) { S.running = null; scheduleRefresh(50); loadDesigns(); }
     }
     if (stick) scrollThread(true);
@@ -713,8 +722,9 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   }
   function autosize() { const t = $("prompt"); t.style.height = "auto"; t.style.height = Math.min(180, t.scrollHeight) + "px"; }
   function showComposerError(msg) { const e = $("composer-err"); e.hidden = !msg; e.textContent = msg || ""; }
-  async function send() {
-    const text = $("prompt").value.trim();
+  async function send(preset, resume) {
+    const fromBox = typeof preset !== "string";
+    const text = fromBox ? $("prompt").value.trim() : preset;
     if (!text || S.running) return;
     showComposerError("");
     $("send").disabled = true;
@@ -726,8 +736,8 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
         location.hash = "#/d/" + encodeURIComponent(r.id);
         loadDesigns();
       } else {
-        await api.post(`/api/designs/${encodeURIComponent(S.current)}/messages`, { text, model: selectedModel() });
-        $("prompt").value = ""; autosize();
+        await api.post(`/api/designs/${encodeURIComponent(S.current)}/messages`, { text, model: selectedModel(), ...(resume ? { resume: true } : {}) });
+        if (fromBox) { $("prompt").value = ""; autosize(); }
         S.running = S.current; $("chat-phase").textContent = "working"; updateComposer(); loadDesigns(); scheduleRefresh(300);
       }
     } catch (e) {
@@ -736,6 +746,8 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     } finally { updateComposer(); }
   }
   $("composer").addEventListener("submit", (e) => { e.preventDefault(); send(); });
+  // Continue buttons only make sense while the open design is unfinished and idle.
+  function syncContinue() { const b = S.bundle; const show = b && b.phase !== "done" && !b.running && S.running !== b.id; document.querySelectorAll('[data-act="continue"]').forEach((x) => { x.hidden = !show; }); }
   $("prompt").addEventListener("keydown", (e) => { if (e.key === "Enter" && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
   $("prompt").addEventListener("input", autosize);
   $("stop").addEventListener("click", async () => { try { await api.post(`/api/designs/${encodeURIComponent(S.current)}/stop`, {}); $("composer-hint").textContent = "Stopping after the current step…"; } catch (e) { showComposerError(e.message); } });
@@ -937,8 +949,8 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     const vias = b.vias.filter((v) => v[4] === net).length, pads = b.footprints.reduce((n, f) => n + f.pads.filter((p) => p.net === net).length, 0);
     const amps = D.net_currents ? D.net_currents[net] : null, cls = D.layout && D.layout.netclasses.find((c) => c.nets.includes(net));
     const parts = [`<b>${esc(net)}</b>`, `${pads} pads`];
-    if (segs) parts.push(`${segs} segments, ${len.toFixed(1)} mm on ${[...ls].sort().join(" + ")}`);
-    if (widths.size) parts.push(`${[...widths].sort().map((w) => w + " mm").join(" / ")} track` + (cls ? ` (class ${esc(cls.name)})` : ""));
+    if (segs) parts.push(`${segs} segments, ${len.toFixed(1)} mm on ${esc([...ls].sort().join(" + "))}`);
+    if (widths.size) parts.push(`${[...widths].sort().map((w) => num(w) + " mm").join(" / ")} track` + (cls ? ` (class ${esc(cls.name)})` : ""));
     if (vias) parts.push(`${vias} via${vias > 1 ? "s" : ""}`);
     if (amps != null) parts.push(`${eng(amps, "A")} simulated peak`);
     if ((b.zones || []).some((z) => z.net === net)) parts.push("poured on both layers");
@@ -1088,7 +1100,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     const D = S.bundle, pane = $("pane-sim");
     if (!D) { pane.innerHTML = placeholder("No design open", "Simulation results appear here."); return; }
     const v = D.verification;
-    if (!v) { pane.innerHTML = placeholder("Not simulated yet", D.spec ? `The spec is locked with ${D.spec.requirements} requirements; the first circuit is next.` : "The agent writes the spec first."); return; }
+    if (!v) { pane.innerHTML = placeholder("Not simulated yet", D.spec ? `The spec is locked with ${num(D.spec.requirements)} requirements; the first circuit is next.` : "The agent writes the spec first."); return; }
     const cond = Object.fromEntries(((D.spec && D.spec.conditions) || []).map((c) => [c.id, c]));
     const condText = (id) => { const c = cond[id]; if (!c) return id || ""; const src = c.sources.map((s) => `${s.net} ${eng(s.volts, "V")}`).join(", "); const ld = (c.loads || []).map((l) => l.amps != null ? `${eng(l.amps, "A")} on ${l.net}` : l.ohms != null ? `${eng(l.ohms, "Ω")} on ${l.net}` : l.net).join(", "); return `${String(id).replace(/_/g, " ")}: ${src}${ld ? " · " + ld : " · no load"}`; };
     let rows = `<thead><tr><th>Requirement</th><th>Allowed</th><th class="n">Nominal</th><th class="n">Worst case</th><th style="width:28%">Corners against the spec</th></tr></thead><tbody>`;
