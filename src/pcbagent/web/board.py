@@ -17,9 +17,27 @@ File-format conventions this relies on (KiCad 6 to 9; checked against pcbnew
 * Back-side footprints store their pads already mirrored, so they need no
   special handling.
 
+``outline`` is the bounding box of the Edge.Cuts graphics. A board with no
+Edge.Cuts falls back to the extents of everything else on it, as pcbnew's
+``BuildBoardPolygonOutlines`` does for a missing outline. So ``outline`` is
+never None: a zero-area box grows by 1 mm on each side, and an empty board
+gets ``[-1, -1, 1, 1]``. ``outline_source`` records which rule applied:
+``"Edge.Cuts"`` or ``"extents"``. The extents leave out text, which pcbnew
+counts, and line stroke widths, so they can be smaller than pcbnew's where
+text or a stroke reaches past everything else.
+
+Text without ``(effects (font (size H W)))``, and a footprint without a
+reference text, use pcbnew's default font height of 1.27 mm.
+
+``court`` is the exact bounding box of the courtyard graphics. pcbnew's
+``FOOTPRINT.GetCourtyard()`` turns circles and arcs into a polygon with up to
+0.02 mm of error (slightly more on small arcs, since KiCad rounds the segment
+count), so a bbox taken from that polygon can differ from this one by about
+that much on curved courtyards; straight-edged courtyards agree exactly.
+
 Output (all lengths in mm, rounded to 4 decimals; angles in [0, 360))::
 
-    {"outline": [x0, y0, x1, y1] | None,
+    {"outline": [x0, y0, x1, y1], "outline_source": "Edge.Cuts" | "extents",
      "footprints": [{"ref", "value", "fpid", "x", "y", "rot", "side",
                      "pads": [{"n", "net", "shape", "w", "h", "lx", "ly",
                                "lrot", "rr", "drill", "th"}],
@@ -50,6 +68,8 @@ BOARD_EDGE_HEADS = ("gr_line", "gr_rect", "gr_arc", "gr_circle", "gr_poly", "gr_
 FP_EDGE_HEADS = ("fp_line", "fp_rect", "fp_arc", "fp_circle", "fp_poly", "fp_curve")
 PAD_SHAPES = {"rect": "rect", "roundrect": "roundrect", "circle": "circle", "oval": "oval"}
 ARC_STEP = math.radians(10.0)  # arc tracks are drawn as chords of at most this sweep
+DEFAULT_TEXT_SIZE = 1.27  # pcbnew's default text height (mm) when a file gives none
+EMPTY_OUTLINE_MARGIN = 1.0  # pcbnew grows a zero-area fallback outline by this much (mm)
 
 
 def read_board(path) -> dict:
@@ -91,8 +111,62 @@ def parse_board(text: str) -> dict:
                 vias.append([_r(at[0]), _r(at[1]), _r(_num(node, "size")), _r(_num(node, "drill")),
                              _net(node, nets)])
 
-    return {"outline": _bbox(edge), "footprints": footprints, "tracks": tracks, "vias": vias,
-            "zones": _zones(tree, nets)}
+    zones = _zones(tree, nets)
+    outline, source = _bbox(edge), EDGE_LAYER
+    if outline is None:
+        outline, source = _extents(tree, tracks, vias, zones), "extents"
+    return {"outline": outline, "outline_source": source, "footprints": footprints, "tracks": tracks,
+            "vias": vias, "zones": zones}
+
+
+def _extents(tree: list, tracks: list, vias: list, zones: list) -> list[float]:
+    """Fallback outline for a board without Edge.Cuts: the bbox of its graphics, pads,
+    copper and zones, grown to a non-zero area the way pcbnew does it."""
+    pts: list[Point] = []
+    for node in sexpr.children(tree):
+        h = sexpr.head(node)
+        if h in BOARD_EDGE_HEADS:  # graphics on any layer
+            pts += _geometry_points(node, _identity)
+        elif h == "zone":
+            pts += _pts(sexpr.child(sexpr.child(node, "polygon") or [], "pts"))
+        elif h in ("footprint", "module"):
+            at = _floats(node, "at") + [0.0, 0.0, 0.0]  # an omitted angle means 0
+            to_board = _local_to_board(at[0], at[1], at[2])
+            pts.append(to_board(0.0, 0.0))
+            for g in sexpr.children(node):
+                if sexpr.head(g) in FP_EDGE_HEADS:  # footprint graphics on any layer
+                    pts += _geometry_points(g, to_board)
+                elif sexpr.head(g) == "pad":
+                    pts += _pad_corners(g, to_board)
+    for x1, y1, x2, y2, w, *_ in tracks:
+        pts += [(x - w / 2, y - w / 2) for x, y in ((x1, y1), (x2, y2))]
+        pts += [(x + w / 2, y + w / 2) for x, y in ((x1, y1), (x2, y2))]
+    for x, y, d, *_ in vias:
+        pts += [(x - d / 2, y - d / 2), (x + d / 2, y + d / 2)]
+    for z in zones:
+        pts += [(x, y) for x, y in z["pts"]]
+
+    box = _bbox(pts) or [0.0, 0.0, 0.0, 0.0]
+    if box[2] - box[0] == 0 or box[3] - box[1] == 0:
+        m = EMPTY_OUTLINE_MARGIN
+        box = [_r(box[0] - m), _r(box[1] - m), _r(box[2] + m), _r(box[3] + m)]
+    return box
+
+
+def _pad_corners(p: list, to_board: Xform) -> list[Point]:
+    """Bounding points of a pad on the board (its rotated size rectangle; a circle's square)."""
+    at = _floats(p, "at")
+    if len(at) < 2:
+        return []
+    size = _floats(p, "size")
+    w = size[0] if size else 0.0
+    h = size[1] if len(size) > 1 else w
+    cx, cy = to_board(at[0], at[1])
+    shape = str(p[3]) if len(p) > 3 and not isinstance(p[3], list) else ""
+    if shape == "circle":
+        return [(cx - w / 2, cy - w / 2), (cx + w / 2, cy + w / 2)]
+    corner = _local_to_board(cx, cy, at[2] if len(at) > 2 else 0.0)  # pad angle is absolute
+    return [corner(sx * w / 2, sy * h / 2) for sx in (-1, 1) for sy in (-1, 1)]
 
 
 # --- footprints ---------------------------------------------------------------
@@ -123,7 +197,7 @@ def _footprint(node: list, nets: dict) -> tuple[dict, list[Point]]:
 
     ref_node, ref = _field(node, "reference", "Reference")
     _, value = _field(node, "value", "Value")
-    label = {"lx": 0.0, "ly": 0.0, "size": 1.0}
+    label = {"lx": 0.0, "ly": 0.0, "size": DEFAULT_TEXT_SIZE}
     if ref_node is not None:
         lat = _floats(ref_node, "at") + [0.0, 0.0]
         label = {"lx": _r(lat[0]), "ly": _r(lat[1]), "size": _r(_font_height(ref_node))}
@@ -150,7 +224,7 @@ def _field(fp: list, text_kind: str, prop_name: str) -> tuple[list | None, str]:
 def _font_height(text_node: list) -> float:
     font = sexpr.child(sexpr.child(text_node, "effects") or [], "font")
     size = _floats(font, "size") if font else []
-    return size[0] if size else 1.0  # KiCad writes (size HEIGHT WIDTH)
+    return size[0] if size else DEFAULT_TEXT_SIZE  # KiCad writes (size HEIGHT WIDTH)
 
 
 def _pad(p: list, fp_rot: float, nets: dict) -> dict:
@@ -171,15 +245,20 @@ def _pad(p: list, fp_rot: float, nets: dict) -> dict:
     if shape == "roundrect":
         rr = _r(float(sexpr.value(p, "roundrect_rratio", 0.25)))
 
+    # pcbnew's parser zeroes the drill of SMD and connector pads even when the file
+    # carries one (pcbnew itself saves API-created connect pads with (drill 0.762)).
     drill = 0
-    d = sexpr.child(p, "drill")
+    d = sexpr.child(p, "drill") if kind not in ("smd", "connect") else None
     if d is not None:
         nums = sexpr.floats(d, 2 if len(d) > 1 and d[1] == "oval" else 1)
         if nums and nums[0]:
             drill = _r(nums[0])
 
-    # pcbnew drops the number of a non-plated hole when it loads the board; do the same.
-    number = str(p[1]) if len(p) > 1 and kind != "np_thru_hole" else ""
+    # pcbnew drops the number of a pad that cannot carry one (a non-plated hole, or a pad
+    # with no copper layer such as a paste-only aperture) when it loads the board; do the same.
+    layers = [str(x) for x in (sexpr.child(p, "layers") or [])[1:]]
+    has_copper = any(x.endswith(".Cu") for x in layers)
+    number = str(p[1]) if len(p) > 1 and kind != "np_thru_hole" and has_copper else ""
     return {"n": number, "net": _net(p, nets), "shape": shape,
             "w": _r(w), "h": _r(h), "lx": _r(at[0]), "ly": _r(at[1]), "lrot": _angle(pad_rot - fp_rot),
             "rr": rr, "drill": drill, "th": kind == "thru_hole"}
