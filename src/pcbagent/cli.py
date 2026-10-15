@@ -155,11 +155,11 @@ def cmd_layout(args) -> int:
 def cmd_fab(args) -> int:
     from .fab import export
     p = _project(args)
-    st = p.state()
-    lay = st.get("layout") or {}
-    if not lay.get("passed"):
-        return _emit(args, {"ok": False, "error": "no DRC-clean board yet; run layout first"}, 1,
-                     "error: no DRC-clean board yet; run layout first")
+    p.require_verified()
+    lay = p.current_layout()
+    if not lay:
+        msg = "no DRC-clean board for the current circuit yet; run layout first"
+        return _emit(args, {"ok": False, "error": msg}, 1, f"error: {msg}")
     res = export(p.root, Path(lay["board"]), p.path("fab"))
     res["ok"] = True
     text = "fabrication files:\n" + "\n".join(f"  {f}" for f in res["files"]) + \

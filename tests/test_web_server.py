@@ -149,9 +149,11 @@ def test_paths_cannot_escape_the_designs_folder(server, tmp_path):
 def test_refuses_to_listen_beyond_localhost(tmp_path):
     from pcbagent.web.server import Manager, serve
     manager = Manager(tmp_path / "d", "m", "http://127.0.0.1:1")
-    for host in ("0.0.0.0", "192.168.1.10"):
+    for host in ("0.0.0.0", "192.168.1.10", "", " ", "::"):
         with pytest.raises(ValueError):
             serve(manager, host, 0)
+    httpd = serve(manager, "localhost", 0)   # resolves only to loopback addresses
+    httpd.server_close()
 
 
 def test_not_ready_explains_what_to_install(server):
@@ -160,6 +162,107 @@ def test_not_ready_explains_what_to_install(server):
 
 
 # --- the agent loop pieces the UI relies on -------------------------------------------
+
+def _scripted(project, script, **kw):
+    from pcbagent.agent.loop import Agent
+
+    class Scripted(Agent):
+        def detect_api(self):
+            return "openai"
+
+        def chat(self):
+            self.calls += 1
+            item = self.script.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
+
+    events = []
+    agent = Scripted.__new__(Scripted)
+    agent.script, agent.calls = list(script), 0
+    Agent.__init__(agent, project, "http://127.0.0.1:9", "scripted", log=lambda *_: None,
+                   on_event=events.append, **kw)
+    return agent, events
+
+
+def _call(name, args):
+    return {"role": "assistant", "content": "", "tool_calls": [
+        {"id": f"c_{name}", "type": "function", "function": {"name": name, "arguments": json.dumps(args)}}]}
+
+
+def _text(t):
+    return {"role": "assistant", "content": t}
+
+
+def _project_in(tmp_path, phase):
+    from pcbagent.project import Project
+    p = Project.create(tmp_path / "d", "a divider")
+    st = p.state()
+    st.update(phase=phase, circuit_attempts=1, layout_attempts=1 if phase == "done" else 0,
+              layout={"passed": True} if phase == "done" else None)
+    p.save_state(st)
+    return p
+
+
+def test_follow_up_runs_every_tool_call_before_ending(tmp_path):
+    p = _project_in(tmp_path, "done")
+    agent, events = _scripted(p, [_call("pcb_status", {}), _call("pcb_status", {}), _text("All good.")])
+    result = agent.reply("Is everything fine?")
+    assert result["ok"] and agent.calls == 3
+    assert [e["name"] for e in events if e["type"] == "tool_result"] == ["pcb_status", "pcb_status"]
+
+
+def test_question_on_unfinished_design_is_answered_without_a_nudge(tmp_path):
+    p = _project_in(tmp_path, "circuit")
+    agent, events = _scripted(p, [_text("The output is 2.5 V because the divider ratio is 1:1.")])
+    result = agent.reply("Why did it fail?")
+    assert result == {"ok": True, "reason": "replied", "turns": 1}
+    assert not [e for e in events if e["type"] == "nudge"]
+
+
+def test_tool_errors_go_back_to_the_model(tmp_path, monkeypatch):
+    p = _project_in(tmp_path, "done")
+    agent, events = _scripted(p, [_call("pcb_parts_search", {"kind": ["resistor"], "limit": "all"}),
+                                  _call("pcb_models", {}), _text("Sorry, fixed.")])
+    real = agent._call_tool
+    monkeypatch.setattr(agent, "_call_tool",
+                        lambda n, a: (_ for _ in ()).throw(RuntimeError("boom")) if n == "pcb_models" else real(n, a))
+    result = agent.reply("find me a resistor")
+    assert result["ok"]
+    results = [e for e in events if e["type"] == "tool_result"]
+    assert results[1]["ok"] is False and "RuntimeError: boom" in results[1]["text"]
+    msgs = json.loads((p.root / "agent" / "messages.json").read_text())["messages"]
+    for i, m in enumerate(msgs):   # every tool call is answered, so the saved conversation stays valid
+        if m.get("tool_calls"):
+            assert msgs[i + 1]["role"] == "tool"
+
+
+def test_missing_closing_summary_does_not_fail_a_finished_design(tmp_path):
+    from pcbagent.agent.loop import ModelError
+    p = _project_in(tmp_path, "done")
+    agent, events = _scripted(p, [_call("pcb_spec", {"title": "x"}), ModelError("connection refused")])
+    result = agent.reply("lock a new spec")   # the spec is locked: the tool refuses, the design stays done
+    assert result["ok"] and events[-1]["type"] == "done" and events[-1]["ok"]
+
+
+def test_event_log_survives_damaged_lines_and_marks_interrupted_runs(tmp_path):
+    from pcbagent.project import Project
+    from pcbagent.web.server import EventLog, Manager
+    p = Project.create(tmp_path / "designs" / "d", "x")
+    path = p.root / "agent" / "events.jsonl"
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'{"seq": 1, "type": "user", "text": "hi"}\n{"seq": 2, "type": "run_start"}\n'
+                     b'{"seq": 3, "type": "thinking"\n{"seq": 4, "type": "assistant", "text": "\xce')
+    log = EventLog(path)
+    assert [e["seq"] for e in log.events] == [1, 2]
+    assert log.interrupted()
+    manager = Manager(tmp_path / "designs", "m", "http://127.0.0.1:9")
+    log = manager.log_for("d")   # a fresh server closes the run the old one never finished
+    assert [e["type"] for e in log.events[-2:]] == ["error", "done"] and log.events[-1]["seq"] == 4
+    assert [e["seq"] for e in log.after(2)] == [3, 4]
+    assert EventLog(path).last_seq == 4   # the cut-off line was terminated before appending
+
+
 
 def test_stopped_run_ends_with_a_done_event(tmp_path, fake_ollama):
     from pcbagent.agent.loop import Agent
@@ -254,7 +357,33 @@ def test_chat_designs_a_board_end_to_end(server):
     status, data, _ = call(server, "POST", f"/api/designs/{design_id}/fab", {})
     assert status == 200 and any(f.endswith(".zip") for f in data["files"])
 
+    # A new circuit makes the board stale: it is no longer shown or exported as current.
+    from conftest import load_example
+    from pcbagent.project import Project
+    p = Project.open(server["manager"].designs / design_id)
+    changed = load_example("divider", "circuit")
+    for c in changed["components"]:
+        if c["ref"] == "R2":
+            c["value"] = "20k"
+    assert p.submit_circuit(changed)["verification_passed"]
+    _, b2, _ = call(server, "GET", f"/api/designs/{design_id}", token=False)
+    assert b2["board"] is None and b2["layout"] is None and b2["layout_stale"] and not b2["passed"]
+    assert call(server, "POST", f"/api/designs/{design_id}/fab", {})[0] == 400
+
     # The chat history is on disk, so a restarted server shows it again.
     from pcbagent.web.server import Manager
     again = Manager(server["manager"].designs, "fake-nemotron", "http://127.0.0.1:1")
     assert [e["seq"] for e in again.log_for(design_id).events] == [e["seq"] for e in events]
+
+
+def test_relayout_forgets_the_old_board_first(tmp_path):
+    from pcbagent.web import bundle
+    p = _project_in(tmp_path, "done")
+    (p.root / "layout").mkdir()
+    (p.root / "layout" / "result.json").write_text(json.dumps({"passed": True, "drc": {"errors": 0}}))
+    assert bundle.summary(p.root)["passed"]
+    p.begin_layout()   # what pipeline.run does before overwriting the board files
+    st = p.state()
+    assert st["layout"] is None and st["phase"] == "layout" and p.current_layout() is None
+    b = bundle.design_bundle(p.root)
+    assert b["layout"] is None and b["board"] is None and b["layout_stale"] and not b["passed"]

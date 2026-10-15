@@ -147,6 +147,8 @@ code, .mono { font-family: var(--mono); font-size: 0.86em; }
 .tabs { display: flex; gap: 2px; overflow-x: auto; }
 .tab { border: 0; background: none; padding: 8px 12px 9px; font-weight: 600; color: var(--muted); border-bottom: 3px solid transparent; white-space: nowrap; }
 .tab[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+.tab:focus-visible { outline-offset: -3px; }
+#board.hide-crt .fp:focus-visible .crt { display: inline; }
 .tab small { font-weight: 400; color: var(--muted); margin-left: 4px; }
 .pane { display: grid; gap: 16px; min-width: 0; }
 .placeholder { border: 1px dashed var(--line); border-radius: var(--r); padding: 28px 20px; text-align: center; color: var(--muted); display: grid; gap: 6px; justify-items: center; }
@@ -177,7 +179,7 @@ code, .mono { font-family: var(--mono); font-size: 0.86em; }
 .caption { position: absolute; left: 10px; top: 8px; font: 500 0.76rem/1.3 var(--mono); color: var(--cv-ink); background: rgba(10,18,14,0.8); padding: 4px 8px; border-radius: 4px; pointer-events: none; }
 .scalebar { position: absolute; right: 10px; bottom: 8px; font: 400 0.7rem/1 var(--mono); color: var(--cv-muted); display: grid; justify-items: end; gap: 4px; pointer-events: none; }
 .scalebar span { display: block; height: 4px; border: 1px solid var(--cv-muted); border-top: 0; }
-.readout { font: 400 0.78rem/1.45 var(--mono); color: var(--cv-muted); padding: 8px 10px 9px; border-top: 1px solid var(--cv-line); min-height: 2.6em; overflow-wrap: anywhere; }
+.readout { font: 400 0.78rem/1.45 var(--mono); color: var(--cv-muted); padding: 8px 10px 9px; border-top: 1px solid var(--cv-line); height: calc(3 * 1.45em + 17px); overflow-y: auto; overflow-wrap: anywhere; }
 .readout b { color: var(--cv-ink); font-weight: 500; }
 #board .sub { fill: var(--cv-sub); stroke: var(--cv-edge); }
 #board .bg { fill: var(--cv-bg); }
@@ -232,11 +234,12 @@ th { text-align: left; font: 600 0.68rem/1.2 var(--body); letter-spacing: 0.08em
 td { padding: 9px 11px; border-bottom: 1px solid var(--line); vertical-align: middle; }
 tr:last-child td { border-bottom: 0; }
 td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; }
-.vtable { min-width: 720px; } .btable { min-width: 760px; }
+.vtable { min-width: 560px; } .btable { min-width: 600px; }
+.req .pill { margin-right: 4px; vertical-align: 1px; }
 .req b { display: block; font: 500 0.84rem var(--mono); }
 .req span { color: var(--muted); font-size: 0.8rem; }
 tr.failrow td { background: color-mix(in srgb, var(--bad-soft) 55%, transparent); }
-.band { position: relative; height: 22px; min-width: 170px; }
+.band { position: relative; height: 22px; min-width: 110px; }
 .band .axis { position: absolute; left: 0; right: 0; top: 10px; height: 2px; background: var(--surface-2); }
 .band .win { position: absolute; top: 4px; height: 14px; background: var(--ok-soft); border-left: 2px solid var(--ok); border-right: 2px solid var(--ok); }
 .band .win.openl { border-left: 0; } .band .win.openr { border-right: 0; }
@@ -250,7 +253,7 @@ tr.failrow td { background: color-mix(in srgb, var(--bad-soft) 55%, transparent)
 .lg-nom { width: 2px; height: 12px; background: var(--accent); }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 .paper { background: var(--paper); border: 1px solid var(--paper-line); border-radius: var(--r); padding: 10px; overflow: auto; }
-.paper svg { display: block; width: 100%; height: auto; min-width: 480px; }
+.paper img { display: block; width: 100%; height: auto; min-width: 480px; max-width: none; }
 .filelist { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .filelist li { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; padding: 8px 0; border-bottom: 1px solid var(--line); }
 .filelist li:last-child { border-bottom: 0; }
@@ -274,10 +277,14 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
 
 /* ---------- narrow screens ---------- */
 .mobile-switch { display: none; }
+.backdrop { display: none; }
+.side-close { display: none; }
 @media (max-width: 1180px) {
   .app { grid-template-columns: minmax(340px, 0.95fr) minmax(0, 1.2fr); }
-  .side { position: fixed; z-index: 20; inset: 0 auto 0 0; width: 270px; transform: translateX(-100%); transition: transform 0.2s; box-shadow: 0 0 40px rgba(0,0,0,0.25); }
-  .side.open { transform: none; }
+  .side { position: fixed; z-index: 20; inset: 0 auto 0 0; width: 270px; transform: translateX(-100%); visibility: hidden; transition: transform 0.2s, visibility 0s 0.2s; box-shadow: 0 0 40px rgba(0,0,0,0.25); }
+  .side.open { transform: none; visibility: visible; transition: transform 0.2s; }
+  .side.open ~ .backdrop { display: block; position: fixed; inset: 0; z-index: 19; background: rgba(10, 18, 14, 0.35); }
+  .side-close { display: inline-flex; margin-left: auto; border: 1px solid var(--line); background: var(--surface); border-radius: 6px; padding: 2px 8px; }
   .menu-btn { display: inline-flex; }
 }
 @media (max-width: 760px) {
@@ -308,6 +315,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     <div class="brand">
       <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true"><rect x="1" y="1" width="24" height="24" rx="5" fill="var(--cv-sub)"/><path d="M6 8h6l3 3h5M6 18h4l4-4h6" stroke="var(--cu-f)" stroke-width="2" fill="none" stroke-linecap="round"/><circle cx="20" cy="11" r="2" fill="var(--pad)"/><circle cx="20" cy="14" r="2" fill="var(--pad)"/><circle cx="6" cy="8" r="2" fill="var(--pad)"/><circle cx="6" cy="18" r="2" fill="var(--pad)"/></svg>
       <b>PCB<span>Agent</span></b>
+      <button class="side-close" type="button" id="side-close" aria-label="Close the designs list">✕</button>
     </div>
     <button class="newbtn" type="button" id="new-design">
       <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>New design
@@ -318,6 +326,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
       <span class="muted">Runs on this computer only.</span>
     </div>
   </aside>
+  <div class="backdrop" id="backdrop"></div>
 
   <section class="chat" aria-label="Conversation">
     <div class="chathead">
@@ -371,7 +380,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   </div>
 </dialog>
 
-<script>
+<script nonce="__PCBAGENT_NONCE__">
 (function () {
   "use strict";
   const CFG = JSON.parse(document.getElementById("cfg").textContent);
@@ -402,9 +411,12 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   // ---------- formatting ----------
   const PFX = [[1e9, "G"], [1e6, "M"], [1e3, "k"], [1, ""], [1e-3, "m"], [1e-6, "µ"], [1e-9, "n"], [1e-12, "p"]];
   const trim = (x, d) => String(+x.toPrecision(d));
+  // Everything put into HTML goes through esc() or num(): design folders are files, and files can be edited.
+  const num = (v) => { const n = Number(v); return Number.isFinite(n) ? String(n) : "—"; };
   function eng(v, unit, digits) {
     digits = digits || 3;
-    if (v == null || !isFinite(v)) return "—";
+    v = Number(v); unit = esc(unit || "");
+    if (v == null || !Number.isFinite(v)) return "—";
     if (unit === "C") return trim(v, digits) + " °C";
     if (unit === "dB") return trim(v, digits) + " dB";
     const a = Math.abs(v);
@@ -412,7 +424,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     for (const [f, p] of PFX) if (a >= f * 0.9995) return trim(v / f, digits) + " " + p + unit;
     return v.toExponential(2) + " " + unit;
   }
-  const money = (v) => v == null ? "—" : "$" + (v < 0.1 ? v.toFixed(3) : v.toFixed(2));
+  const money = (v) => { const n = Number(v); return v == null || !Number.isFinite(n) ? "—" : "$" + (n < 0.1 ? n.toFixed(3) : n.toFixed(2)); };
   function ago(ts) {
     if (!ts) return "";
     const s = Math.max(0, Date.now() / 1000 - ts);
@@ -437,7 +449,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   }
 
   // ---------- state ----------
-  const S = { health: null, designs: [], running: null, current: null, bundle: null, es: null, lastSeq: 0, histCount: 0, runModel: "", tab: "board", cards: {}, activeCard: null, thinkingEl: null, thinkingSince: 0, refreshTimer: null, autoReplay: false, boardSig: "" };
+  const S = { filesMsg: null, health: null, designs: [], running: null, current: null, bundle: null, es: null, lastSeq: 0, histCount: 0, runModel: "", tab: "board", cards: {}, activeCard: null, thinkingEl: null, thinkingSince: 0, refreshTimer: null, autoReplay: false, boardSig: "" };
 
   // ---------- setup / health ----------
   async function loadHealth(refresh) {
@@ -479,7 +491,10 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
 
   // ---------- designs list ----------
   async function loadDesigns() {
+    const before = S.running;
     try { const d = await api.get("/api/designs"); S.designs = d.designs; S.running = d.running; } catch (e) { /* keep last list */ }
+    // The open design's run ended without this page hearing it (e.g. the server restarted): resync.
+    if (S.current && before === S.current && S.running !== S.current) scheduleRefresh(50);
     renderDesigns(); updateComposer();
   }
   function phaseDot(d) {
@@ -491,7 +506,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   function renderDesigns() {
     const nav = $("dlist");
     if (!S.designs.length) { nav.innerHTML = `<p class="empty-list">No designs yet. Describe a board to start one.</p>`; return; }
-    nav.innerHTML = S.designs.map((d) => `<a href="#/d/${encodeURIComponent(d.id)}" ${d.id === S.current ? 'aria-current="page"' : ""}><b>${esc(d.title)}</b><span><i class="dot ${phaseDot(d)}"></i>${S.running === d.id ? "working…" : esc(PHASE_TEXT[d.phase] || d.phase || "")}${d.board_mm ? ` · ${d.board_mm[0]}×${d.board_mm[1]} mm` : ""} · ${esc(ago(d.updated))}</span></a>`).join("");
+    nav.innerHTML = S.designs.map((d) => `<a href="#/d/${encodeURIComponent(d.id)}" ${d.id === S.current ? 'aria-current="page"' : ""}><b>${esc(d.title)}</b><span><i class="dot ${phaseDot(d)}"></i>${S.running === d.id ? "working…" : esc(PHASE_TEXT[d.phase] || d.phase || "")}${d.board_mm ? ` · ${num(d.board_mm[0])}×${num(d.board_mm[1])} mm` : ""} · ${esc(ago(d.updated))}</span></a>`).join("");
   }
 
   // ---------- routing ----------
@@ -555,7 +570,8 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   }
 
   // ---------- chat rendering ----------
-  function scrollThread() { const t = $("thread"); t.scrollTop = t.scrollHeight; }
+  function nearBottom() { const t = $("thread"); return t.scrollHeight - t.scrollTop - t.clientHeight < 120; }
+  function scrollThread(force) { const t = $("thread"); if (force || nearBottom()) t.scrollTop = t.scrollHeight; }
   function add(html, cls) {
     const el = document.createElement("div");
     el.className = cls; el.innerHTML = html;
@@ -602,16 +618,16 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     const el = S.cards[ev.id] || stepCard({ id: ev.id, name: ev.name, summary: "" });
     const f = ev.facts || {};
     let title = (TOOL_LABEL[ev.name] || [ev.name, ev.name])[1], sub = "", extra = "", actions = "";
-    if (ev.name === "pcb_models") sub = `${f.count || 0} part models available`;
+    if (ev.name === "pcb_models") sub = `${num(f.count || 0)} part models available`;
     if (ev.name === "pcb_spec") {
-      if (ev.ok) sub = `${esc(f.title || "")} · ${f.requirements} requirements`;
+      if (ev.ok) sub = `${esc(f.title || "")} · ${num(f.requirements)} requirements`;
       else { title = "The spec was rejected"; extra = list(f.errors, "fails"); }
     }
     if (ev.name === "pcb_circuit") {
-      const v = f.version ? `Circuit v${f.version}` : "Circuit";
+      const v = f.version ? `Circuit v${num(f.version)}` : "Circuit";
       if (ev.ok) {
         title = `${v} passed every check at every corner`;
-        sub = f.cost ? `Parts sourced: ${money(f.cost.parts_usd)} for 5 boards${f.cost.extended_parts ? ` · ${f.cost.extended_parts} extended part${f.cost.extended_parts > 1 ? "s" : ""}` : ""}${f.sample_catalog ? " · sample catalog" : ""}` : "Parts sourced";
+        sub = f.cost ? `Parts sourced: ${money(f.cost.parts_usd)} for 5 boards${f.cost.extended_parts ? ` · ${num(f.cost.extended_parts)} extended part${f.cost.extended_parts > 1 ? "s" : ""}` : ""}${f.sample_catalog ? " · sample catalog" : ""}` : "Parts sourced";
       } else if (f.stage === "validate") { title = "Circuit rejected before simulation"; extra = list(f.failed || f.errors, "fails"); }
       else if (f.verification_passed && f.parts_passed === false) { title = `${v} simulated fine, but not every part is orderable`; extra = list(f.failed, "fails"); }
       else if (f.stage === "verify" || f.verification_passed === false) { title = `${v} failed ${(f.failed || []).length || ""} check${(f.failed || []).length === 1 ? "" : "s"}`.replace("  ", " "); extra = list(f.failed, "fails"); }
@@ -620,14 +636,14 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     if (ev.name === "pcb_layout") {
       if (ev.ok) {
         const d = f.drc || {};
-        title = `Board routed${f.board_mm ? ` · ${f.board_mm[0]} × ${f.board_mm[1]} mm` : ""}`;
-        sub = `KiCad DRC: ${d.errors} errors, ${d.unconnected} unconnected, ${d.warnings} warnings · ${f.tracks} track segments, ${f.vias} via${f.vias === 1 ? "" : "s"}`;
+        title = `Board routed${f.board_mm ? ` · ${num(f.board_mm[0])} × ${num(f.board_mm[1])} mm` : ""}`;
+        sub = `KiCad DRC: ${num(d.errors)} errors, ${num(d.unconnected)} unconnected, ${num(d.warnings)} warnings · ${num(f.tracks)} track segments, ${num(f.vias)} via${f.vias === 1 ? "" : "s"}`;
         actions = `<div class="actions"><button class="linkbtn" type="button" data-act="board">View board</button><button class="linkbtn" type="button" data-act="replay">Replay placement and routing</button></div>`;
       } else { title = "Layout did not pass"; sub = esc(f.message || ""); extra = list(f.errors, "fails"); }
-      if (f.unmet && f.unmet.length) extra += list(f.unmet.map((c) => `${c.type} ${c.ref || (c.refs || []).join(", ")}${c.to ? " → " + c.to : ""} is off by ${c.off_mm} mm`), "");
+      if (f.unmet && f.unmet.length) extra += list(f.unmet.map((c) => `${c.type} ${c.ref || (c.refs || []).join(", ")}${c.to ? " → " + c.to : ""} is off by ${num(c.off_mm)} mm`), "");
     }
     if (ev.name === "pcb_parts_search") sub = esc(String(ev.text || "").split("\n").length + " result line(s)");
-    const secs = f.seconds != null && f.seconds >= 0.5 ? ` · ${f.seconds.toFixed(1)} s` : "";
+    const secs = Number(f.seconds) >= 0.5 ? ` · ${Number(f.seconds).toFixed(1)} s` : "";
     el.className = "step" + (ev.ok ? "" : " fail");
     el.innerHTML = `<div class="step-top"><span class="step-ico ${ev.ok ? "ok" : "fail"}">${ev.ok ? ICON_OK : ICON_FAIL}</span><div><div class="step-title">${esc(title)}</div>${sub || secs ? `<div class="step-sub">${sub}${secs}</div>` : ""}</div></div>${extra}${actions}<details><summary>Tool output</summary><pre>${esc(ev.text || "")}</pre></details>`;
     el.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => { selectTab("board"); setView("results"); if (b.dataset.act === "replay") setTimeout(replay, 100); }));
@@ -641,8 +657,9 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
 
   function renderEvent(ev, live) {
     const t = ev.type;
+    const stick = !live || nearBottom();
     if (t !== "thinking" && t !== "progress") hideThinking();
-    if (t === "user") add(esc(ev.text), "msg user");
+    if (t === "user") { add(esc(ev.text), "msg user"); if (live) scrollThread(true); }
     else if (t === "run_start") { S.runModel = ev.model || S.runModel; }
     else if (t === "thinking") { if (live || (ev.seq === S.histCount && S.bundle && S.bundle.running)) showThinking(ev.model || S.runModel, live ? Date.now() : Date.parse(ev.t)); }
     else if (t === "assistant") add(`<span class="who">${esc(S.runModel)}</span>${md(ev.text)}`, "msg agent");
@@ -655,15 +672,16 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     else if (t === "error") add(`<b>Error.</b> ${esc(ev.text)}`, "err");
     else if (t === "done") {
       Object.values(S.cards).forEach((c) => { const ico = c.querySelector(".step-ico.run"); if (ico) { ico.className = "step-ico stop"; ico.textContent = "–"; } });
-      add(`<span class="dot ${ev.ok ? "ok" : "warn"}"></span>${ev.ok ? "Finished" : "Stopped"}: ${esc(ev.reason || "")}${ev.turns ? ` · ${ev.turns} model turn${ev.turns === 1 ? "" : "s"}` : ""}`, "note end");
+      const what = ev.reason === "replied" ? "Answered" : ev.ok ? `Finished: ${esc(ev.reason || "")}` : `Stopped: ${esc(ev.reason || "")}`;
+      add(`<span class="dot ${ev.ok ? "ok" : "warn"}"></span>${what}${ev.turns ? ` · ${num(ev.turns)} model turn${ev.turns === 1 ? "" : "s"}` : ""}`, "note end");
       if (live) { S.running = null; scheduleRefresh(50); loadDesigns(); }
     }
-    if (live || t === "done") scrollThread();
+    if (stick) scrollThread(true);
   }
   function historyLoaded() {
     // A run that ended without a "done" event (the server was stopped mid-run) leaves spinners behind.
     if (S.bundle && !S.bundle.running) Object.values(S.cards).forEach((c) => { const ico = c.querySelector(".step-ico.run"); if (ico) { ico.className = "step-ico stop"; ico.textContent = "–"; } });
-    scrollThread();
+    scrollThread(true);
   }
 
   // ---------- welcome ----------
@@ -710,7 +728,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
       } else {
         await api.post(`/api/designs/${encodeURIComponent(S.current)}/messages`, { text, model: selectedModel() });
         $("prompt").value = ""; autosize();
-        S.running = S.current; updateComposer(); loadDesigns();
+        S.running = S.current; $("chat-phase").textContent = "working"; updateComposer(); loadDesigns(); scheduleRefresh(300);
       }
     } catch (e) {
       showComposerError(e.message);
@@ -751,7 +769,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     renderPhases();
     const b = S.bundle;
     // Re-draw the board only when it changed, so a refresh does not reset zoom, selection or a replay.
-    const sig = b ? [b.id, b.board ? JSON.stringify(b.board).length : 0, b.layout ? b.layout.elapsed : "", b.parts ? b.parts.bom.length : 0, b.verification ? b.verification.circuit_version : ""].join(":") : "";
+    const sig = b ? [b.id, b.board ? JSON.stringify(b.board).length : 0, b.layout ? b.layout.elapsed : "", b.parts ? b.parts.bom.length : 0, b.verification ? b.verification.circuit_version : "", b.phase, S.running === b.id, b.layout_stale].join(":") : "";
     const changed = sig !== S.boardSig;
     if (changed) { S.boardSig = sig; renderBoardPane(); }
     renderSimPane(); renderSchPane(); renderPartsPane(); renderFilesPane();
@@ -773,8 +791,11 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     if (!b) { pane.innerHTML = placeholder("No design open", "Start a design in the chat, or open one from the list."); return; }
     const chips = summaryChips(b);
     if (!b.board) {
-      const what = b.phase === "layout" ? (S.running === b.id ? "The agent is laying out the board." : "The circuit is verified; the board has not been laid out yet.")
-        : b.phase === "circuit" ? "The board is laid out after the circuit passes simulation." : "The agent is writing the spec.";
+      const busy = S.running === b.id;
+      let what = b.phase === "layout" ? (busy ? "The agent is laying out the board." : "The circuit is verified; the board has not been laid out yet.")
+        : b.phase === "circuit" ? "The board is laid out after the circuit passes simulation."
+        : busy ? "The agent is writing the spec." : "No spec has been locked yet.";
+      if (b.layout_stale) what += " The previous board was made for an earlier circuit, so it is not shown.";
       pane.innerHTML = `<p class="request-q">“${esc(b.request)}”</p>${chips}${placeholder("No board yet", esc(what))}${b.layout && !b.layout.passed ? `<div class="err"><b>Last layout:</b> ${esc(b.layout.message || "failed")}</div>` : ""}`;
       return;
     }
@@ -804,9 +825,9 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     const out = [];
     const v = b.verification;
     if (v) out.push([v.passed ? "" : "bad", `${v.requirements.filter((r) => r.passed).length} of ${v.requirements.length} requirements met at every corner`]);
-    if (b.layout && b.layout.drc && b.layout.drc.errors != null) out.push([b.layout.drc.errors || b.layout.drc.unconnected ? "bad" : "", `DRC ${b.layout.drc.errors} errors · ${b.layout.drc.unconnected} unconnected`]);
+    if (b.layout && b.layout.drc && b.layout.drc.errors != null) out.push([b.layout.drc.errors || b.layout.drc.unconnected ? "bad" : "", `DRC ${num(b.layout.drc.errors)} errors · ${num(b.layout.drc.unconnected)} unconnected`]);
     if (b.layout && b.layout.constraints.length) { const met = b.layout.constraints.filter((c) => c.satisfied).length; out.push([met === b.layout.constraints.length ? "" : "warn", `${met} of ${b.layout.constraints.length} placement constraints met`]); }
-    if (b.parts && b.parts.cost) out.push([b.parts.sample ? "warn" : "", `${money(b.parts.cost.parts_usd)} in parts for ${b.parts.boards} boards${b.parts.sample ? " (sample catalog)" : ""}`]);
+    if (b.parts && b.parts.cost) out.push([b.parts.sample ? "warn" : "", `${money(b.parts.cost.parts_usd)} in parts for ${num(b.parts.boards)} boards${b.parts.sample ? " (sample catalog)" : ""}`]);
     return out.length ? `<div class="chips">${out.map(([c, t]) => `<span class="chip ${c}"><i></i>${esc(t)}</span>`).join("")}</div>` : "";
   }
   function applyLayers() { const svg = $("board"); if (!svg) return; Object.keys(layers).forEach((k) => svg.classList.toggle("hide-" + k, !layers[k])); }
@@ -824,7 +845,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     fitView = { x: o[0] - m, y: o[1] - m, w: o[2] - o[0] + 2 * m, h: o[3] - o[1] + 2 * m };
     view = Object.assign({}, fitView);
     el("rect", { class: "bg", x: o[0] - 500, y: o[1] - 500, width: 1000 + o[2] - o[0], height: 1000 + o[3] - o[1] }, svg);
-    el("rect", { class: "sub", x: o[0], y: o[1], width: o[2] - o[0], height: o[3] - o[1], "stroke-width": 0.15 }, svg);
+    el("rect", { class: "sub", x: o[0], y: o[1], width: o[2] - o[0], height: o[3] - o[1], "stroke-width": 0.15, ...(b.outline_source === "extents" ? { "stroke-dasharray": "0.6 0.4" } : {}) }, svg);
     const addNet = (net, e) => { if (!net) return; e.setAttribute("data-net", net); (netEls[net] = netEls[net] || []).push(e); };
     const gZb = el("g", {}, svg), gTb = el("g", {}, svg), gZf = el("g", {}, svg), gTf = el("g", {}, svg), gVia = el("g", {}, svg), gFp = el("g", {}, svg);
     for (const z of b.zones || []) { const front = z.layer === "F.Cu"; const p = el("path", { d: "M" + z.pts.map((q) => q[0] + " " + q[1]).join("L") + "Z", class: front ? "zf" : "zb" }, front ? gZf : gZb); addNet(z.net, p); zoneEls.push(p); }
@@ -950,7 +971,7 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     h += `<dt>Model</dt><dd>${esc(c.part || f.value)}${c.value ? " · " + esc(c.value) : ""}</dd>`;
     if (c.note) h += `<dt>Role</dt><dd>${esc(c.note)}</dd>`;
     h += `<dt>Footprint</dt><dd class="mono">${esc(f.fpid.split(":").pop())}</dd>`;
-    h += `<dt>Position</dt><dd class="mono num">${(f.x - D.board.outline[0]).toFixed(2)}, ${(f.y - D.board.outline[1]).toFixed(2)} mm · ${((f.rot % 360) + 360) % 360}°</dd>`;
+    h += `<dt>Position</dt><dd class="mono num">${(Number(f.x) - D.board.outline[0]).toFixed(2)}, ${(Number(f.y) - D.board.outline[1]).toFixed(2)} mm · ${num(((f.rot % 360) + 360) % 360)}°</dd>`;
     if (l) {
       h += `<dt>Catalog part</dt><dd>${esc(l.mpn)} <span class="muted">· ${esc(l.manufacturer)}</span></dd>`;
       h += `<dt>LCSC</dt><dd class="mono">${esc(l.lcsc)}${D.parts.sample ? ' <span class="pill warn">sample</span>' : ""}</dd>`;
@@ -978,16 +999,16 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   function renderRules() {
     const D = S.bundle, L = D.layout; if (!L) { $("rules").innerHTML = ""; return; }
     let h = `<header><h3>Layout rules</h3></header><div style="display:grid;gap:6px"><span class="eyebrow">Placement constraints</span><ul class="clist">`;
-    h += L.constraints.map((c) => `<li><span class="ctype">${esc(c.type)}</span><p>${esc(consText(c))}${c.reason || c.auto ? `<span>${esc(c.reason || "")}${c.auto ? (c.reason ? " · " : "") + "added automatically from the datasheet" : ""}</span>` : ""}</p>${c.satisfied ? '<span class="pill">met</span>' : `<span class="pill warn">off ${c.off_mm} mm</span>`}</li>`).join("") || `<li><span></span><p class="muted">none</p><span></span></li>`;
+    h += L.constraints.map((c) => `<li><span class="ctype">${esc(c.type)}</span><p>${esc(consText(c))}${c.reason || c.auto ? `<span>${esc(c.reason || "")}${c.auto ? (c.reason ? " · " : "") + "added automatically from the datasheet" : ""}</span>` : ""}</p>${c.satisfied ? '<span class="pill">met</span>' : `<span class="pill warn">off ${num(c.off_mm)} mm</span>`}</li>`).join("") || `<li><span></span><p class="muted">none</p><span></span></li>`;
     h += `</ul></div><div style="display:grid;gap:6px"><span class="eyebrow">Track widths from simulated current</span><ul class="clist">`;
     const used = new Set(L.netclasses.flatMap((c) => c.nets));
     const others = [...new Set(D.board.tracks.map((t) => t[6]))].filter((n) => n && !used.has(n)).sort();
     const cur = (n) => D.net_currents && D.net_currents[n] != null ? `${n} ${eng(D.net_currents[n], "A")}` : null;
-    h += L.netclasses.map((c) => `<li><span class="ctype">${esc(c.name)}</span><p>${esc(c.nets.join(", "))}<span>${esc(c.nets.map(cur).filter(Boolean).join(" · "))}</span></p><span class="mono small num">${c.track} mm</span></li>`).join("");
+    h += L.netclasses.map((c) => `<li><span class="ctype">${esc(c.name)}</span><p>${esc(c.nets.join(", "))}<span>${esc(c.nets.map(cur).filter(Boolean).join(" · "))}</span></p><span class="mono small num">${num(c.track)} mm</span></li>`).join("");
     if (others.length) h += `<li><span class="ctype">default</span><p>${esc(others.join(", "))}<span>${esc(others.map(cur).filter(Boolean).join(" · ") || "signal nets")}</span></p><span class="mono small num">${DEFAULT_TRACK} mm</span></li>`;
     const d = L.drc;
-    h += `</ul></div><div style="display:grid;gap:6px"><span class="eyebrow">KiCad design rule check</span><ul class="clist"><li><span class="ctype">errors</span><p>Clearance, track width, hole and edge rules</p><span class="pill${d.errors ? " bad" : ""}">${d.errors}</span></li><li><span class="ctype">open</span><p>Unconnected pads</p><span class="pill${d.unconnected ? " bad" : ""}">${d.unconnected}</span></li>`;
-    for (const [k, n] of Object.entries(d.warning_types || {})) h += `<li><span class="ctype">warning</span><p>${esc(DRC_NAMES[k] || k)}<span>cosmetic, does not block fabrication</span></p><span class="pill plain">${n}</span></li>`;
+    h += `</ul></div><div style="display:grid;gap:6px"><span class="eyebrow">KiCad design rule check</span><ul class="clist"><li><span class="ctype">errors</span><p>Clearance, track width, hole and edge rules</p><span class="pill${d.errors ? " bad" : ""}">${num(d.errors)}</span></li><li><span class="ctype">open</span><p>Unconnected pads</p><span class="pill${d.unconnected ? " bad" : ""}">${num(d.unconnected)}</span></li>`;
+    for (const [k, n] of Object.entries(d.warning_types || {})) h += `<li><span class="ctype">warning</span><p>${esc(DRC_NAMES[k] || k)}<span>cosmetic, does not block fabrication</span></p><span class="pill plain">${num(n)}</span></li>`;
     $("rules").innerHTML = h + `</ul></div>`;
   }
 
@@ -1070,12 +1091,12 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     if (!v) { pane.innerHTML = placeholder("Not simulated yet", D.spec ? `The spec is locked with ${D.spec.requirements} requirements; the first circuit is next.` : "The agent writes the spec first."); return; }
     const cond = Object.fromEntries(((D.spec && D.spec.conditions) || []).map((c) => [c.id, c]));
     const condText = (id) => { const c = cond[id]; if (!c) return id || ""; const src = c.sources.map((s) => `${s.net} ${eng(s.volts, "V")}`).join(", "); const ld = (c.loads || []).map((l) => l.amps != null ? `${eng(l.amps, "A")} on ${l.net}` : l.ohms != null ? `${eng(l.ohms, "Ω")} on ${l.net}` : l.net).join(", "); return `${String(id).replace(/_/g, " ")}: ${src}${ld ? " · " + ld : " · no load"}`; };
-    let rows = `<thead><tr><th>Requirement</th><th>Allowed</th><th class="n">Nominal</th><th class="n">Worst-case range</th><th style="width:26%">Corners against the spec</th><th>Result</th></tr></thead><tbody>`;
+    let rows = `<thead><tr><th>Requirement</th><th>Allowed</th><th class="n">Nominal</th><th class="n">Worst case</th><th style="width:28%">Corners against the spec</th></tr></thead><tbody>`;
     for (const r of v.requirements) {
-      const what = `${MEASURE[r.measure] || r.measure || ""} ${r.target_of || ""}${r.hz ? " at " + eng(r.hz, "Hz") : ""}`;
-      rows += `<tr class="${r.passed ? "" : "failrow"}"><td class="req"><b>${esc(r.id)}</b><span>${esc(what)}</span><br><span>${esc(condText(r.condition))}</span></td><td class="num">${allowed(r)}</td><td class="n">${eng(r.nominal, r.unit, 4)}</td><td class="n">${eng(r.min, r.unit, 4)} … ${eng(r.max, r.unit, 4)}</td><td>${band(r)}</td><td><span class="pill${r.passed ? "" : " bad"}">${r.passed ? "pass" : "fail"}</span> <span class="muted small">${r.corners || ""} runs</span></td></tr>`;
+      const what = `${MEASURE[r.measure] || r.measure || ""} ${r.target_of || ""}`;
+      rows += `<tr class="${r.passed ? "" : "failrow"}"><td class="req"><b><span class="pill${r.passed ? "" : " bad"}">${r.passed ? "pass" : "fail"}</span> ${esc(r.id)}</b><span>${esc(what)}${r.hz ? " at " + eng(r.hz, "Hz") : ""}</span><br><span>${esc(condText(r.condition))} · ${num(r.corners || 0)} runs</span></td><td class="num">${allowed(r)}</td><td class="n">${eng(r.nominal, r.unit, 4)}</td><td class="n">${eng(r.min, r.unit, 4)} …<br>${eng(r.max, r.unit, 4)}</td><td>${band(r)}</td></tr>`;
     }
-    pane.innerHTML = `<div style="display:grid;gap:6px"><h2 style="font-size:1.35rem">Circuit v${esc(v.circuit_version || "?")} against the locked spec</h2><p class="muted small">Each requirement runs once with nominal parts and once at every combination of tolerance extremes. ${esc(v.simulator)} wrote ${v.raw_files} result files${v.elapsed != null ? ` in ${Number(v.elapsed).toFixed(2)} s` : ""}.</p></div>
+    pane.innerHTML = `<div style="display:grid;gap:6px"><h2 style="font-size:1.35rem">Circuit v${esc(v.circuit_version || "?")} against the locked spec</h2><p class="muted small">Each requirement runs once with nominal parts and once at every combination of tolerance extremes. ${esc(v.simulator)} wrote ${num(v.raw_files)} result files${v.elapsed != null ? ` in ${Number(v.elapsed).toFixed(2)} s` : ""}.</p></div>
       <div class="legend" aria-hidden="true"><span><i class="lg-win"></i>allowed by the spec</span><span><i class="lg-rng"></i>range over all tolerance corners</span><span><i class="lg-nom"></i>nominal parts</span></div>
       <div class="tablebox"><table class="vtable">${rows}</tbody></table></div>
       ${v.ratings.length ? `<div class="cards">${v.ratings.map((r) => `<div class="card"><header><b class="mono">${esc(r.ref)}</b><span class="pill${r.passed ? "" : " bad"}">${r.passed ? "within rating" : "over rating"}</span></header>${ratingBar(r)}<p class="small muted">${esc(r.message)}</p></div>`).join("")}</div>` : ""}
@@ -1087,7 +1108,8 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   function renderSchPane() {
     const D = S.bundle, pane = $("pane-sch");
     if (!D || !D.schematic) { pane.innerHTML = placeholder("No schematic yet", D && D.verification && !D.verification.passed ? "The schematic is drawn once a circuit passes simulation." : "The schematic is drawn once a circuit passes simulation and its parts are chosen."); return; }
-    pane.innerHTML = `<p class="muted small">Generated by PCBAgent from the circuit; every footprint on the board links back to its symbol.</p><div class="paper">${D.schematic}</div>`;
+    pane.innerHTML = `<p class="muted small">Generated by PCBAgent from the current circuit; every footprint on the board links back to its symbol.</p><div class="paper"><img id="sch-img" alt="Schematic of ${esc(D.title)}"></div>`;
+    $("sch-img").src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(D.schematic);
   }
 
   // ---------- parts pane ----------
@@ -1095,11 +1117,11 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     const D = S.bundle, pane = $("pane-parts");
     if (!D || !D.parts) { pane.innerHTML = placeholder("No parts chosen yet", "Parts are picked from your local catalog after the circuit passes simulation."); return; }
     const P = D.parts, c = P.cost || {};
-    let rows = `<thead><tr><th>Refs</th><th>Value</th><th>Part</th><th>Manufacturer</th><th>LCSC</th><th>Library</th><th class="n">Stock</th><th class="n">Each</th><th class="n">Per board</th></tr></thead><tbody>`;
-    for (const l of P.bom) rows += `<tr><td class="mono" style="color:var(--accent)">${esc(l.refs.join(", "))}</td><td>${esc(l.value)}</td><td>${esc(l.mpn)}<br><span class="muted small mono">${esc(l.footprint)}</span></td><td>${esc(l.manufacturer)}</td><td class="mono small">${esc(l.lcsc)}</td><td>${l.library_type === "basic" ? '<span class="pill">basic</span>' : `<span class="pill warn">${esc(l.library_type || "")}</span>`}</td><td class="n">${Number(l.stock).toLocaleString("en-US")}</td><td class="n">${money(l.price)}</td><td class="n">${esc(l.qty)}</td></tr>`;
-    pane.innerHTML = `${P.sample ? `<div class="setup">These part numbers come from the <b>sample catalog</b> and are not real. Run <code>pcbagent catalog update</code> for the real JLCPCB list.</div>` : ""}
+    let rows = `<thead><tr><th>Refs</th><th>Value</th><th>Part</th><th>LCSC</th><th class="n">Stock</th><th class="n">Each</th><th class="n">Qty</th></tr></thead><tbody>`;
+    for (const l of P.bom) rows += `<tr><td class="mono" style="color:var(--accent)">${esc(l.refs.join(", "))}</td><td>${esc(l.value)}</td><td>${esc(l.mpn)} <span class="muted small">${esc(l.manufacturer)}</span><br><span class="muted small mono">${esc(l.footprint)}</span></td><td class="mono small">${esc(l.lcsc)}<br>${l.library_type === "basic" ? '<span class="pill">basic</span>' : `<span class="pill warn">${esc(l.library_type || "")}</span>`}</td><td class="n">${Number(l.stock).toLocaleString("en-US")}</td><td class="n">${money(l.price)}</td><td class="n">${num(l.qty)}</td></tr>`;
+    pane.innerHTML = `${P.sample ? `<div class="setup"><p>These part numbers come from the <b>sample catalog</b> and are not real. Run <code>pcbagent catalog update</code> for the real JLCPCB list.</p></div>` : ""}
       <div class="tablebox"><table class="btable">${rows}</tbody></table></div>
-      <div class="costline"><span>Parts for ${esc(P.boards)} boards <b>${money(c.parts_usd)}</b></span>${c.extended_parts ? `<span>Extended-part setup fees about <b>${money(c.extended_fees_usd_estimate)}</b></span>` : ""}<span>${esc(c.note || "")}</span></div>
+      <div class="costline"><span>Parts for ${num(P.boards)} boards <b>${money(c.parts_usd)}</b></span>${c.extended_parts ? `<span>Extended-part setup fees about <b>${money(c.extended_fees_usd_estimate)}</b></span>` : ""}<span>${esc(c.note || "")}</span></div>
       ${P.failures.length ? `<div class="err"><b>Not orderable:</b> ${esc(P.failures.join("; "))}</div>` : ""}`;
   }
 
@@ -1110,12 +1132,15 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
     const done = D.layout && D.layout.passed;
     const fmt = (n) => n > 1e6 ? (n / 1e6).toFixed(1) + " MB" : n > 1e3 ? (n / 1e3).toFixed(0) + " kB" : n + " B";
     pane.innerHTML = `<div class="card"><header><h3>Design files</h3><span class="eyebrow">${esc(D.id)}</span></header>
-      ${D.files.length ? `<ul class="filelist">${D.files.map((f) => `<li><a href="/api/designs/${encodeURIComponent(D.id)}/files/${f.path.split("/").map(encodeURIComponent).join("/")}" download>${esc(f.path)}</a><span class="muted small num">${fmt(f.size)}</span></li>`).join("")}</ul>` : `<p class="muted">Nothing to download yet.</p>`}
+      ${D.files.length ? `<ul class="filelist">${D.files.map((f) => `<li><a href="/api/designs/${encodeURIComponent(D.id)}/files/${String(f.path).split("/").map(encodeURIComponent).join("/")}" download>${esc(f.path)}</a><span class="muted small num">${fmt(Number(f.size) || 0)}</span></li>`).join("")}</ul>` : `<p class="muted">Nothing to download yet.</p>`}
+      ${D.layout_stale ? `<p class="small muted">The board files in layout/ belong to an earlier circuit.</p>` : ""}
       <div class="btnrow">${done ? `<button class="btn primary" type="button" id="do-fab">${D.files.some((f) => f.path.startsWith("fab/")) ? "Export fabrication files again" : "Export Gerbers, drill, BOM and CPL"}</button><button class="btn" type="button" id="do-kicad">Open in KiCad with replay</button>` : `<span class="muted small">Gerbers and the KiCad replay are available once the board passes DRC.</span>`}</div>
       <p class="small" id="files-msg"></p></div>`;
+    const say = (text) => { S.filesMsg = { id: D.id, text }; const m = $("files-msg"); if (m) m.textContent = text; };
+    if (S.filesMsg && S.filesMsg.id === D.id) $("files-msg").textContent = S.filesMsg.text;
     if (done) {
-      $("do-fab").addEventListener("click", async (e) => { e.target.disabled = true; $("files-msg").textContent = "Exporting…"; try { const r = await api.post(`/api/designs/${encodeURIComponent(D.id)}/fab`, {}); $("files-msg").textContent = `Wrote ${r.files.length} files.${r.warnings.length ? " Note: " + r.warnings.join(" ") : ""}`; await refreshBundle(); } catch (err) { $("files-msg").textContent = err.message; e.target.disabled = false; } });
-      $("do-kicad").addEventListener("click", async () => { $("files-msg").textContent = "Opening KiCad…"; try { await api.post(`/api/designs/${encodeURIComponent(D.id)}/kicad`, {}); $("files-msg").textContent = "KiCad's PCB editor is opening and will replay the layout."; } catch (err) { $("files-msg").textContent = err.message; } });
+      $("do-fab").addEventListener("click", async (e) => { e.target.disabled = true; say("Exporting…"); try { const r = await api.post(`/api/designs/${encodeURIComponent(D.id)}/fab`, {}); say(`Wrote ${r.files.length} files.${r.warnings.length ? " Note: " + r.warnings.join(" ") : ""}`); await refreshBundle(); } catch (err) { say(err.message); e.target.disabled = false; } });
+      $("do-kicad").addEventListener("click", async () => { say("Opening KiCad…"); try { const r = await api.post(`/api/designs/${encodeURIComponent(D.id)}/kicad`, {}); say(r.launched === false ? `KiCad was not started: ${r.message || "unknown reason"}` : "KiCad's PCB editor is opening and will replay the layout."); } catch (err) { say(err.message); } });
     }
   }
 
@@ -1128,10 +1153,15 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
   }
   $("ms-chat").addEventListener("click", () => setView("chat"));
   $("ms-results").addEventListener("click", () => setView("results"));
-  const toggleSide = () => $("side").classList.toggle("open");
+  const closeSide = () => $("side").classList.remove("open");
+  const toggleSide = () => { $("side").classList.toggle("open"); if ($("side").classList.contains("open")) $("side-close").focus(); };
   $("menu-btn").addEventListener("click", toggleSide);
   $("ms-menu").addEventListener("click", toggleSide);
-  $("new-design").addEventListener("click", () => { if (location.hash) location.hash = ""; else openDesign(null); $("prompt").focus(); });
+  $("side-close").addEventListener("click", closeSide);
+  $("backdrop").addEventListener("click", closeSide);
+  $("dlist").addEventListener("click", (e) => { if (e.target.closest("a")) closeSide(); });
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("side").classList.contains("open")) { closeSide(); $("prompt").focus(); } });
+  $("new-design").addEventListener("click", () => { closeSide(); if (location.hash) location.hash = ""; else openDesign(null); $("prompt").focus(); });
   $("status-btn").addEventListener("click", () => { $("setup-dlg").showModal(); });
   $("setup-close").addEventListener("click", () => $("setup-dlg").close());
   $("setup-refresh").addEventListener("click", () => loadHealth(true));
@@ -1140,7 +1170,8 @@ dialog::backdrop { background: rgba(10, 18, 14, 0.45); }
 
   loadHealth(false);
   loadDesigns().then(route);
-  setInterval(loadDesigns, 15000);
+  // Poll often while another design is running (to free the composer promptly), rarely otherwise.
+  (function poll() { setTimeout(() => { loadDesigns().finally(poll); }, S.running && S.running !== S.current ? 3000 : 15000); })();
 })();
 </script>
 </body>

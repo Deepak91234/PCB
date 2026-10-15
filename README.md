@@ -134,7 +134,8 @@ needs.
 It is the same agent loop as `pcbagent run`, and designs are ordinary design folders in `./designs`
 (`--designs` to change), so you can continue them with the CLI or Pi. The server only listens on
 localhost, refuses requests addressed to any other host name, and requires a per-session token for
-anything that changes state. The page loads no fonts, scripts or images from the internet. One design
+anything that changes state. The page loads no fonts, scripts or images from the internet. Other user
+accounts on the same computer can reach localhost too, so don't run it on a machine you share. One design
 runs at a time; **Stop** takes effect after the current step. Options: `--port`, `--model`, `--ollama`,
 `--no-browser`.
 

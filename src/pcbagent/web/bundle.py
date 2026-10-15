@@ -30,15 +30,27 @@ def _r(v, n=9):
     return None if v is None else round(v, n)
 
 
+def _current_layout(state: dict) -> dict | None:
+    """The recorded layout attempt if it belongs to the current verified circuit (passed or not)."""
+    lay = state.get("layout")
+    if not lay:
+        return None
+    if lay.get("circuit_hash") and lay["circuit_hash"] != state.get("verified_circuit_hash"):
+        return None
+    return lay
+
+
 def summary(root: Path) -> dict:
     """The one-line view used in the design list."""
     state = _load(root / STATE_FILE) or {}
     spec = _load(root / "spec.json") or {}
-    lay = state.get("layout") or {}
-    return {"id": root.name, "title": spec.get("title") or state.get("request") or root.name,
-            "request": state.get("request", ""), "phase": state.get("phase"), "created": state.get("created"),
+    lay = _current_layout(state) or {}
+    board_mm = lay.get("board_mm")
+    return {"id": root.name, "title": str(spec.get("title") or state.get("request") or root.name),
+            "request": str(state.get("request", "")), "phase": state.get("phase"), "created": state.get("created"),
             "updated": (root / STATE_FILE).stat().st_mtime if (root / STATE_FILE).exists() else None,
-            "passed": bool(lay.get("passed")), "board_mm": lay.get("board_mm")}
+            "passed": bool(lay.get("passed")),
+            "board_mm": [float(x) for x in board_mm] if isinstance(board_mm, list) and len(board_mm) == 2 else None}
 
 
 def list_designs(base: Path) -> list[dict]:
@@ -122,23 +134,31 @@ def crop_svg(text: str) -> str:
         body = re.sub(r'<rect x="0(?:\.0+)?" y="0(?:\.0+)?" width="[\d.]+" height="[\d.]+" rx="[\d.]+" />', "",
                       body, count=1)
     body = re.sub(r"<title>.*?</title>", "<title>Schematic</title>", body, flags=re.S)
-    # Inline SVG must not carry scripts or external references.
-    body = re.sub(r"<script.*?</script>", "", body, flags=re.S | re.I)
-    body = re.sub(r"""\son[a-z]+\s*=\s*("[^"]*"|'[^']*')""", "", body, flags=re.I)
-    return re.sub(r"\n\s*", "\n", body)
+    return sanitize_svg(re.sub(r"\n\s*", "\n", body))
+
+
+def sanitize_svg(text: str) -> str:
+    """Drop anything in an SVG that could run or fetch: scripts, event handlers, foreign content, links."""
+    text = re.sub(r"<script.*?</script\s*>", "", text, flags=re.S | re.I)
+    text = re.sub(r"<foreignObject.*?</foreignObject\s*>", "", text, flags=re.S | re.I)
+    text = re.sub(r"""\son[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""", "", text, flags=re.I)
+    return re.sub(r"""\s(?:xlink:)?href\s*=\s*("[^"]*"|'[^']*')""", "", text, flags=re.I)
 
 
 def schematic_svg(root: Path, name: str) -> str | None:
-    """Render the design's schematic with kicad-cli, cached next to the design until it changes."""
-    sch = root / "layout" / f"{name}.kicad_sch"
-    if not sch.exists():
-        sch = root / f"{name}.kicad_sch"
+    """Render the design's schematic with kicad-cli, cached next to the design until it changes.
+
+    The root schematic is rewritten whenever a circuit passes and its parts are chosen, so it
+    always describes the current verified circuit (the copy in layout/ may be older).
+    """
+    sch = root / f"{name}.kicad_sch"
     if not sch.exists():
         return None
     cache = root / "agent" / "schematic.svg"
     try:
         if cache.exists() and cache.stat().st_mtime >= sch.stat().st_mtime:
-            return cache.read_text()
+            # The cache is a file in the design folder like any other: never trust it unsanitised.
+            return sanitize_svg(cache.read_text(errors="replace"))
         from ..kicad.tools import find_kicad_cli
         out_dir = root / "agent" / "sch_svg"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -149,7 +169,7 @@ def schematic_svg(root: Path, name: str) -> str | None:
         svg = next(out_dir.glob("*.svg"), None)
         if svg is None:
             return None
-        text = crop_svg(svg.read_text())
+        text = sanitize_svg(crop_svg(svg.read_text()))
         cache.write_text(text)
         return text
     except Exception:  # noqa: BLE001 - the schematic view is optional; KiCad may be missing or fail
@@ -160,7 +180,7 @@ def files(root: Path, name: str) -> list[dict]:
     out = []
     for pattern in DOWNLOADS:
         for path in sorted(root.glob(pattern.format(name=name))):
-            if path.is_file():
+            if path.is_file() and not path.is_symlink() and root.resolve() in path.resolve().parents:
                 out.append({"path": path.relative_to(root).as_posix(), "size": path.stat().st_size})
     return out
 
@@ -173,8 +193,13 @@ def design_bundle(root: Path) -> dict:
     circuit = _load(root / "circuit.json")
     ver = _load(root / "verification.json")
     parts = _load(root / "parts.json") if ver and ver.get("passed") else None
-    lay = _load(root / "layout" / "result.json")
-    trace = _load(root / "layout" / "layout_trace.json")
+    current = _current_layout(state)
+    # layout/result.json describes the last attempt; it only counts if the state still records that
+    # attempt for the current circuit (a newer circuit, or an interrupted re-layout, makes it stale).
+    lay = _load(root / "layout" / "result.json") if current else None
+    if lay and lay.get("circuit_hash") and lay["circuit_hash"] != state.get("verified_circuit_hash"):
+        lay = None
+    trace = _load(root / "layout" / "layout_trace.json") if lay else None
     out = {
         **summary(root),
         "state": {k: state.get(k) for k in ("phase", "spec_hash", "circuit_attempts", "circuit_version",
@@ -182,6 +207,7 @@ def design_bundle(root: Path) -> dict:
         "spec": None, "components": (circuit or {}).get("components", []), "verification": None,
         "net_currents": (ver or {}).get("net_currents_a", {}), "parts": None, "layout": None, "board": None,
         "frames": [], "route_order": [], "schematic": None, "files": files(root, name),
+        "layout_stale": bool(not lay and (root / "layout" / "result.json").exists()),
     }
     if spec:
         out["spec"] = {"title": spec.get("title"), "summary": spec.get("summary", ""), "ports": spec.get("ports", []),
@@ -197,7 +223,7 @@ def design_bundle(root: Path) -> dict:
     if lay:
         out["layout"] = _layout(lay)
         board = root / "layout" / f"{name}.kicad_pcb"
-        if board.exists() and (lay.get("tracks") is not None or lay.get("passed")):
+        if board.exists() and lay.get("passed"):
             try:
                 from .board import read_board
                 out["board"] = read_board(board)
@@ -207,6 +233,6 @@ def design_bundle(root: Path) -> dict:
             out["frames"] = [{ref: [round(p[0], 3), round(p[1], 3), p[2]] for ref, p in f.items()}
                              for f in trace.get("placement_frames", [])]
             out["route_order"] = [g["net"] for g in trace.get("routing", [])]
-    if circuit and (root / f"{name}.kicad_sch").exists():
+    if parts and (root / f"{name}.kicad_sch").exists():
         out["schematic"] = schematic_svg(root, name)
     return out

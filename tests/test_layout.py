@@ -203,3 +203,14 @@ def test_fab_export(tmp_path):
     assert "Comment,Designator,Footprint,LCSC Part #" in bom and "SAMPLE" in bom
     cpl = (p.path("fab") / "cpl_jlcpcb.csv").read_text().splitlines()
     assert cpl[0] == "Designator,Mid X,Mid Y,Layer,Rotation" and any(r.startswith("U1,") for r in cpl)
+
+
+def test_freerouting_gets_a_clearance_margin(tmp_path):
+    from pcbagent.layout.pipeline import pad_dsn_clearance
+    dsn = tmp_path / "b.dsn"
+    dsn.write_text("(pcb b (resolution um 10) (structure (rule (width 250) (clearance 200.1)"
+                   " (clearance 50 (type smd_smd))) (class W040 GND (rule (clearance 200.1)))))")
+    assert pad_dsn_clearance(dsn) == 3
+    text = dsn.read_text()
+    assert text.count("(clearance 210.1") == 2 and "(clearance 60 (type smd_smd))" in text
+    assert "(width 250)" in text

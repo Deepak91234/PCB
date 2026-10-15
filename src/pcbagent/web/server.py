@@ -15,6 +15,7 @@ nothing from the network.
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -44,38 +45,66 @@ def _now() -> str:
 
 
 class EventLog:
-    """The chat history of one design: an append-only list of events, saved as JSON lines."""
+    """The chat history of one design: an append-only list of events, saved as JSON lines.
+
+    Every event has a ``seq`` that only grows; readers resume by seq value, so a damaged
+    or missing line on disk never shifts what a page receives.
+    """
 
     def __init__(self, path: Path):
         self.path = path
         self.cond = threading.Condition()
         self.events: list[dict] = []
         if path.exists():
-            for line in path.read_text().splitlines():
+            for line in path.read_bytes().decode("utf-8", "replace").splitlines():
                 try:
-                    self.events.append(json.loads(line))
+                    ev = json.loads(line)
                 except ValueError:
                     continue
+                if isinstance(ev, dict) and isinstance(ev.get("seq"), int) and ev["seq"] > self.last_seq:
+                    self.events.append(ev)
+
+    @property
+    def last_seq(self) -> int:
+        return self.events[-1]["seq"] if self.events else 0
 
     def append(self, event: dict) -> dict:
         with self.cond:
-            ev = {"seq": len(self.events) + 1, "t": _now(), **event}
+            ev = {"seq": self.last_seq + 1, "t": _now(), **event}
+            line = json.dumps(ev, ensure_ascii=False) + "\n"
+            try:
+                self.path.parent.mkdir(parents=True, exist_ok=True)
+                with self.path.open("ab+") as fh:
+                    fh.seek(0, os.SEEK_END)
+                    if fh.tell():
+                        fh.seek(-1, os.SEEK_END)
+                        if fh.read(1) != b"\n":   # a previous write was cut off mid-line
+                            fh.write(b"\n")
+                    fh.write(line.encode())
+            except OSError:
+                pass  # still show it live; the history on disk just misses this event
             self.events.append(ev)
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            with self.path.open("a") as fh:
-                fh.write(json.dumps(ev, ensure_ascii=False) + "\n")
             self.cond.notify_all()
             return ev
 
     def after(self, seq: int) -> list[dict]:
         with self.cond:
-            return self.events[seq:]
+            return [e for e in self.events if e["seq"] > seq]
 
     def wait(self, seq: int, timeout: float) -> list[dict]:
         with self.cond:
-            if len(self.events) <= seq:
+            if self.last_seq <= seq:
                 self.cond.wait(timeout)
-            return self.events[seq:]
+            return [e for e in self.events if e["seq"] > seq]
+
+    def interrupted(self) -> bool:
+        """True if the last run never ended (the server stopped while it was running)."""
+        for ev in reversed(self.events):
+            if ev.get("type") == "done":
+                return False
+            if ev.get("type") == "run_start":
+                return True
+        return False
 
 
 class Busy(RuntimeError):
@@ -97,8 +126,9 @@ class Manager:
         self.max_attempts = max_attempts
         self.lock = threading.Lock()
         self.busy: str | None = None      # design with an active run; reserved before its thread starts
+        self.run_id = 0                   # increments per run, so a finished run never frees a newer one
         self.agent = None                 # that run's Agent, once created
-        self.logs: dict[str, EventLog] = {}
+        self.logs: dict[str, tuple] = {}  # design id -> (folder identity, EventLog)
         self._health: dict | None = None
         self._health_at = 0.0
         self._health_lock = threading.Lock()
@@ -113,10 +143,22 @@ class Manager:
         return root
 
     def log_for(self, design_id: str) -> EventLog:
+        root = self.design_root(design_id)
+        state = json.loads((root / STATE_FILE).read_text())
+        # A folder deleted and re-created under the same name is a different design.
+        identity = (root.stat().st_ino, state.get("created"))
         with self.lock:
-            if design_id not in self.logs:
-                self.logs[design_id] = EventLog(self.design_root(design_id) / "agent" / "events.jsonl")
-            return self.logs[design_id]
+            cached = self.logs.get(design_id)
+            if cached and cached[0] == identity:
+                return cached[1]
+            log = EventLog(root / "agent" / "events.jsonl")
+            self.logs[design_id] = (identity, log)
+            busy_here = self.busy == design_id
+        if not busy_here and log.interrupted():
+            log.append({"type": "error", "text": "This run was interrupted: the server stopped while it was running. "
+                                                 "Send a message to continue."})
+            log.append({"type": "done", "ok": False, "reason": "interrupted"})
+        return log
 
     def running(self) -> str | None:
         with self.lock:
@@ -194,12 +236,12 @@ class Manager:
                 raise Busy(self.busy)
             project = Project.create(self._new_root(request), request)
             design_id = project.root.name
-            self.busy = design_id
+            run_id = self._reserve(design_id)
         try:
             self.log_for(design_id).append({"type": "user", "text": request, "model": model})
-            self._launch(design_id, project, model, lambda agent: agent.run(request))
+            self._launch(design_id, run_id, project, model, lambda agent: agent.run(request))
         except BaseException:
-            self._release(design_id)
+            self._release(design_id, run_id)
             raise
         return design_id
 
@@ -213,12 +255,12 @@ class Manager:
         with self.lock:
             if self.busy:
                 raise Busy(self.busy)
-            self.busy = design_id
+            run_id = self._reserve(design_id)
         try:
             self.log_for(design_id).append({"type": "user", "text": text, "model": model})
-            self._launch(design_id, Project.open(root), model, lambda agent: agent.reply(text))
+            self._launch(design_id, run_id, Project.open(root), model, lambda agent: agent.reply(text))
         except BaseException:
-            self._release(design_id)
+            self._release(design_id, run_id)
             raise
 
     def _last_model(self, design_id: str) -> str | None:
@@ -227,47 +269,60 @@ class Manager:
                 return ev["model"]
         return None
 
-    def _release(self, design_id: str) -> None:
+    def _reserve(self, design_id: str) -> int:
+        """Claim the run slot (call with the lock held)."""
+        self.run_id += 1
+        self.busy = design_id
+        self.agent = None
+        return self.run_id
+
+    def _release(self, design_id: str, run_id: int) -> None:
         with self.lock:
-            if self.busy == design_id:
+            if self.busy == design_id and self.run_id == run_id:
                 self.busy = None
                 self.agent = None
 
-    def _launch(self, design_id: str, project: Project, model: str, work) -> None:
-        from ..agent.loop import Agent
+    def _launch(self, design_id: str, run_id: int, project: Project, model: str, work) -> None:
+        from ..agent.loop import Agent, ModelError
         log = self.log_for(design_id)
+        finished = threading.Event()
 
         def on_event(ev: dict) -> None:
             if ev.get("type") == "done":
+                if finished.is_set():
+                    return  # exactly one done per run
+                finished.set()
                 # Free the slot before the page hears "done", so its next request is not refused as busy.
-                self._release(design_id)
+                self._release(design_id, run_id)
             log.append(ev)
+
+        def fail(text: str, reason: str, detail: str | None = None) -> None:
+            log.append({"type": "error", "text": text, **({"detail": detail} if detail else {})})
+            on_event({"type": "done", "ok": False, "reason": reason})
 
         try:
             agent = Agent(project, self.ollama, model, max_circuit=self.max_attempts, log=lambda *_: None,
                           on_event=on_event)
         except Exception as exc:  # noqa: BLE001
-            log.append({"type": "error", "text": f"could not start the agent: {exc}"})
-            on_event({"type": "done", "ok": False, "reason": "could not start"})
+            fail(f"could not start the agent: {exc}", "could not start")
             raise
 
         def target():
             try:
                 work(agent)
-            except OSError as exc:
-                log.append({"type": "error", "text": f"the model stopped answering: {exc}. Check that Ollama is "
-                                                     f"running (`ollama serve`) and `{model}` is pulled."})
-                on_event({"type": "done", "ok": False, "reason": "model unavailable"})
+            except ModelError as exc:
+                fail(f"The model stopped answering: {exc}. Check that Ollama is running (`ollama serve`) and "
+                     f"`{model}` is pulled.", "model unavailable")
             except Exception as exc:  # noqa: BLE001 - report every failure in the chat instead of dying silently
-                log.append({"type": "error", "text": f"{type(exc).__name__}: {exc}",
-                            "detail": traceback.format_exc()[-2000:]})
-                on_event({"type": "done", "ok": False, "reason": "internal error"})
+                fail(f"{type(exc).__name__}: {exc}", "internal error", traceback.format_exc()[-2000:])
             finally:
-                self._release(design_id)
+                if not finished.is_set():
+                    on_event({"type": "done", "ok": False, "reason": "ended without a result"})
 
         thread = threading.Thread(target=target, name=f"pcbagent-{design_id}", daemon=True)
         with self.lock:
-            self.agent = agent
+            if self.run_id == run_id:
+                self.agent = agent
         log.append({"type": "run_start", "model": model, "api": agent.api})
         thread.start()
 
@@ -281,9 +336,10 @@ class Manager:
     def export_fab(self, design_id: str) -> dict:
         from ..fab import export
         project = Project.open(self.design_root(design_id))
-        lay = project.state().get("layout") or {}
-        if not lay.get("passed"):
-            raise ProjectError("no DRC-clean board yet")
+        project.require_verified()
+        lay = project.current_layout()
+        if not lay:
+            raise ProjectError("no DRC-clean board for the current circuit yet")
         return export(project.root, Path(lay["board"]), project.path("fab"))
 
     def open_in_kicad(self, design_id: str) -> dict:
@@ -301,6 +357,7 @@ def make_handler(manager: Manager, token: str, port: int):
     class Handler(BaseHTTPRequestHandler):
         server_version = f"pcbagent/{__version__}"
         protocol_version = "HTTP/1.1"
+        timeout = 30  # drop connections that never finish a request (the event stream writes every 15 s)
 
         def log_message(self, fmt, *args):  # keep the terminal for the URL and errors
             pass
@@ -440,7 +497,10 @@ def make_handler(manager: Manager, token: str, port: int):
             html = (STATIC / "index.html").read_text()
             config = json.dumps({"token": token, "model": manager.model, "version": __version__})
             html = html.replace("__PCBAGENT_CONFIG__", config.replace("</", "<\\/"))
-            csp = ("default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src 'self' data:; "
+            # Only the page's own script may run: no inline handlers, nothing injected through content.
+            nonce = secrets.token_urlsafe(16)
+            html = html.replace("__PCBAGENT_NONCE__", nonce)
+            csp = (f"default-src 'none'; script-src 'nonce-{nonce}'; style-src 'unsafe-inline'; img-src 'self' data:; "
                    "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
             self._send(200, html.encode(), "text/html; charset=utf-8",
                        {"Content-Security-Policy": csp, "X-Frame-Options": "DENY"})
@@ -491,6 +551,42 @@ class Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
     stopping = False
+    max_connections = 64
+
+    def __init__(self, *args, **kwargs):
+        self.slots = threading.BoundedSemaphore(self.max_connections)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request, client_address):
+        # One thread per connection, but never without limit: refuse instead of exhausting threads and files.
+        if not self.slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self.slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self.slots.release()
+
+
+def loopback_only(host: str, port: int) -> None:
+    """Refuse any listen address that is not, or does not resolve only to, a loopback address."""
+    if not host or not host.strip():
+        raise ValueError("refusing to listen on an empty host (it would mean every interface); use 127.0.0.1")
+    try:
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+    except OSError as exc:
+        raise ValueError(f"cannot resolve {host}: {exc}") from exc
+    addrs = {info[4][0] for info in infos}
+    if not addrs or not all(ipaddress.ip_address(a.split("%")[0]).is_loopback for a in addrs):
+        raise ValueError(f"refusing to listen on {host} ({', '.join(sorted(addrs))}): the UI runs the agent on this "
+                         "machine, so it only listens on localhost")
 
 
 class Server6(Server):
@@ -499,11 +595,12 @@ class Server6(Server):
 
 def serve(manager: Manager, host: str = "127.0.0.1", port: int = 8765) -> Server:
     """Create the server (not yet serving). ``port=0`` picks a free port."""
-    if not is_local_url(f"http://[{host}]" if ":" in host else f"http://{host}"):
-        raise ValueError(f"refusing to listen on {host}: the UI runs the agent on this machine, so it only "
-                         "listens on localhost")
+    loopback_only(host, port)
     token = secrets.token_urlsafe(24)
     httpd = (Server6 if ":" in host else Server)((host, port), None)
+    if not ipaddress.ip_address(httpd.server_address[0].split("%")[0]).is_loopback:
+        httpd.server_close()
+        raise ValueError(f"refusing to serve on {httpd.server_address[0]}")
     real_port = httpd.server_address[1]
     httpd.RequestHandlerClass = make_handler(manager, token, real_port)
     httpd.token = token

@@ -163,6 +163,10 @@ class Project:
 
         state["circuit_version"] += 1
         version = state["circuit_version"]
+        if state.get("layout"):
+            # The board was built from the previous circuit; it no longer describes this design.
+            self._event(state, "layout_invalidated", reason=f"circuit v{version} submitted")
+            state["layout"] = None
         _write_json(self.path("circuit.json"), circ.raw)
         _write_json(self.path("history", f"circuit_v{version:03d}.json"), circ.raw)
 
@@ -285,12 +289,33 @@ class Project:
             return "write placement constraints with pcb_layout"
         return "done"
 
+    def begin_layout(self) -> None:
+        """Forget the current board before a new layout attempt overwrites its files.
+
+        If the attempt is interrupted, the design then says "not laid out" instead of
+        presenting a half-written board as DRC clean.
+        """
+        state = self.state()
+        state["layout"] = None
+        if state["phase"] == "done":
+            state["phase"] = "layout"
+        self.save_state(state)
+
+    def current_layout(self) -> dict | None:
+        """The layout state if it is DRC clean and was built from the current verified circuit."""
+        state = self.state()
+        lay = state.get("layout") or {}
+        if not lay.get("passed"):
+            return None
+        if lay.get("circuit_hash") and lay["circuit_hash"] != state.get("verified_circuit_hash"):
+            return None
+        return lay
+
     def set_layout(self, info: dict) -> None:
         state = self.state()
         state["layout_attempts"] += 1
         state["layout"] = info
-        if info.get("passed"):
-            state["phase"] = "done"
+        state["phase"] = "done" if info.get("passed") else "layout"
         self._event(state, "layout", passed=info.get("passed"), drc=info.get("drc_summary"))
         self.save_state(state)
 

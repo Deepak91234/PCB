@@ -20,7 +20,10 @@ class SimulatorMissing(RuntimeError):
 
 
 def find_ngspice() -> str:
-    exe = os.environ.get("PCBAGENT_NGSPICE") or shutil.which("ngspice")
+    env = os.environ.get("PCBAGENT_NGSPICE")
+    if env and not (os.path.isfile(env) and os.access(env, os.X_OK)):
+        raise SimulatorMissing(f"PCBAGENT_NGSPICE={env} is not an executable file")
+    exe = env or shutil.which("ngspice")
     if not exe:
         raise SimulatorMissing(
             "ngspice not found. Install it (apt install ngspice / brew install ngspice / "

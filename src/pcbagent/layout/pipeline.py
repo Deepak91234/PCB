@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -96,6 +97,8 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40, pro
     started = time.time()
     say = progress or (lambda _text: None)
     spec, circuit, parts = project.require_verified()
+    circuit_hash = project.state().get("verified_circuit_hash")
+    project.begin_layout()
     ground = spec["ground"]
     prefs = spec.get("preferences", {})
     default_pkg = prefs.get("passive_package", "0603")
@@ -161,7 +164,7 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40, pro
     result: dict = {
         "passed": False, "board_mm": [placed.width, placed.height], "placement_legal": placed.legal,
         "placement_issues": issues, "constraints": cons_report, "netclasses": netclasses,
-        "kicad_version": kicad_version(),
+        "kicad_version": kicad_version(), "circuit_hash": circuit_hash,
     }
     trace = {"version": 1, "board": board_path.name, "origin": list(ORIGIN), "size": [placed.width, placed.height],
              "placement_frames": [{ref: [ox + p[0], oy + p[1], p[2]] for ref, p in f["positions"].items()}
@@ -192,6 +195,7 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40, pro
         if sch:
             result["schematic"] = str(sch)
         say("routing with Freerouting")
+        pad_dsn_clearance(dsn_path)
         fr = freerouting.route(dsn_path, ses_path, max_passes=max_passes)
         result["freerouting"] = {k: v for k, v in fr.items() if k != "command"}
         if not fr["ok"]:
@@ -237,6 +241,30 @@ def run(project, raw_constraints: dict, seed: int = 1, max_passes: int = 40, pro
     return result
 
 
+def pad_dsn_clearance(dsn_path: Path, margin_mm: float = 0.01) -> int:
+    """Ask Freerouting for slightly more clearance than KiCad's DRC rule.
+
+    Freerouting rounds geometry to its own grid and occasionally places a track a couple of
+    micrometres inside the clearance it was given (0.1982 mm against 0.2 mm), which KiCad's DRC
+    then reports as an error. A 10 um margin is invisible in practice and removes that failure.
+    Returns the number of clearance rules changed.
+    """
+    text = dsn_path.read_text()
+    m = re.search(r"\(resolution\s+(um|mm|mil|inch|cm)\s", text)
+    per_mm = {"um": 1000.0, "mm": 1.0, "mil": 1000 / 25.4, "inch": 1 / 25.4, "cm": 0.1}[m.group(1) if m else "um"]
+    margin = margin_mm * per_mm
+    count = 0
+
+    def bump(match):
+        nonlocal count
+        count += 1
+        return f"(clearance {float(match.group(1)) + margin:g}"
+
+    text = re.sub(r"\(clearance\s+([0-9]+(?:\.[0-9]+)?)", bump, text)
+    dsn_path.write_text(text)
+    return count
+
+
 def _routing_frames(wires: list[dict], vias: list[dict], stubs: list | None = None) -> list[dict]:
     def is_stub(x1, y1, x2, y2, layer, net):
         for sx1, sy1, sx2, sy2, slayer, snet in stubs or []:
@@ -273,7 +301,8 @@ def _finish(project, layout_dir: Path, result: dict, trace: dict, started: float
     (layout_dir / "result.json").write_text(json.dumps(result, indent=2))
     project.set_layout({"passed": result["passed"], "message": result.get("message"),
                         "board": str(layout_dir / f"{project.name}.kicad_pcb"),
-                        "drc_summary": result.get("drc"), "board_mm": result.get("board_mm")})
+                        "drc_summary": result.get("drc"), "board_mm": result.get("board_mm"),
+                        "circuit_hash": result.get("circuit_hash")})
     project.archive_layout()
 
 

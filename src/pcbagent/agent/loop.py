@@ -106,11 +106,17 @@ class Agent:
                                      headers={"Content-Type": "application/json", "Authorization": "Bearer ollama"})
         try:
             with urllib.request.urlopen(req, timeout=float(os.environ.get("PCBAGENT_MODEL_TIMEOUT", "900"))) as resp:
-                return json.load(resp)
+                raw = resp.read()
         except urllib.error.HTTPError as exc:
             # Ollama explains itself in the body ("model 'x' not found, try pulling it first").
             detail = exc.read().decode("utf-8", "replace")[:300]
             raise ModelError(f"model endpoint returned HTTP {exc.code}: {detail}") from exc
+        except (OSError, ValueError) as exc:   # refused, reset, timed out, bad URL
+            raise ModelError(f"cannot reach the model endpoint {self.host}: {exc}") from exc
+        try:
+            return json.loads(raw)
+        except ValueError as exc:
+            raise ModelError(f"the model endpoint sent something that is not JSON: {raw[:120]!r}") from exc
 
     def detect_api(self) -> str:
         """Ollama's native API lets us set the context window per request; prefer it when present.
@@ -130,6 +136,13 @@ class Agent:
         return "openai"
 
     def chat(self) -> dict:
+        try:
+            return self._chat()
+        except (KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise ModelError(f"the model endpoint sent a reply PCBAgent cannot read ({type(exc).__name__}: {exc})") \
+                from exc
+
+    def _chat(self) -> dict:
         tools = [{"type": "function", "function": t} for t in TOOLS]
         if self.api == "ollama":
             msgs = []
@@ -253,16 +266,36 @@ class Agent:
         self.emit("done", **result)
         return result
 
+    def _run_tool(self, name: str, args: dict) -> tuple[str, bool, dict]:
+        """Run one tool call; any failure becomes a message the model can act on, never a crash."""
+        try:
+            return self._call_tool(name, args)
+        except Exception as exc:  # noqa: BLE001 - e.g. wrong argument types from a small model
+            return (f"Error: {type(exc).__name__}: {exc}. Check the arguments and try again.", False,
+                    {"errors": [f"{type(exc).__name__}: {exc}"]})
+
     def _loop(self, max_turns: int, follow_up: bool = False) -> dict:
         st = self.project.status()
         self._base = (st["circuit_attempts"], st["layout_attempts"])
         idle = 0
+        acted = False         # a state-changing tool ran in this turn
+        settled = 0           # model turns since the design reached a finished state
         for turn in range(max_turns):
             if self.cancel.is_set():
                 return self._finish({"ok": False, "reason": "stopped by the user", "turns": turn})
+            finished, why = self.done()
+            closing = acted and finished and not why.startswith("stopped")
             t0 = time.time()
             self.emit("thinking", model=self.model)
-            msg = self.chat()
+            try:
+                msg = self.chat()
+            except ModelError as exc:
+                if closing:
+                    # The board is done; only the model's closing words are missing.
+                    self.emit("error", text=f"The model could not write its summary ({exc}). The design itself "
+                                            "is finished.")
+                    return self._finish({"ok": True, "reason": why, "turns": turn})
+                raise
             calls = msg.get("tool_calls") or []
             self.messages.append({"role": "assistant", "content": msg.get("content") or "",
                                   **({"tool_calls": calls} if calls else {})})
@@ -273,58 +306,66 @@ class Agent:
             if calls:
                 idle = 0
                 for call in calls:
-                    fn = call["function"]
-                    call_id = call.get("id", fn["name"])
+                    fn = call.get("function") or {}
+                    name = str(fn.get("name") or "")
+                    call_id = call.get("id", name)
                     if self.cancel.is_set():
-                        out = "Skipped: the user stopped the run."
-                        self.messages.append({"role": "tool", "tool_call_id": call_id, "name": fn["name"],
-                                              "content": out})
-                        continue
-                    try:
-                        args = json.loads(fn.get("arguments") or "{}")
-                    except json.JSONDecodeError as exc:
-                        out, ok, facts = (f"Rejected: tool arguments are not valid JSON ({exc}). "
-                                          "Send a JSON object."), False, {"errors": [str(exc)]}
-                        self.emit("tool_call", id=call_id, name=fn["name"], summary="(unreadable arguments)")
+                        out, ok, facts = "Skipped: the user stopped the run.", False, {}
                     else:
-                        args = args if isinstance(args, dict) else {}
-                        self.log(f"[tool] {fn['name']}")
-                        self.emit("tool_call", id=call_id, name=fn["name"], summary=describe_call(fn["name"], args))
-                        t1 = time.time()
-                        out, ok, facts = self._call_tool(fn["name"], args)
-                        facts["seconds"] = round(time.time() - t1, 2)
-                    self.log("       " + out.replace("\n", "\n       ")[:1500])
-                    self.emit("tool_result", id=call_id, name=fn["name"], ok=ok, text=out[:4000], facts=facts,
-                              phase=self.project.state()["phase"])
-                    self.messages.append({"role": "tool", "tool_call_id": call_id,
-                                          "name": fn["name"], "content": out[:8000]})
+                        try:
+                            args = json.loads(fn.get("arguments") or "{}")
+                        except (TypeError, json.JSONDecodeError) as exc:
+                            out, ok, facts = (f"Rejected: tool arguments are not valid JSON ({exc}). "
+                                              "Send a JSON object."), False, {"errors": [str(exc)]}
+                            self.emit("tool_call", id=call_id, name=name, summary="(unreadable arguments)")
+                        else:
+                            args = args if isinstance(args, dict) else {}
+                            self.log(f"[tool] {name}")
+                            self.emit("tool_call", id=call_id, name=name, summary=describe_call(name, args))
+                            t1 = time.time()
+                            out, ok, facts = self._run_tool(name, args)
+                            facts["seconds"] = round(time.time() - t1, 2)
+                            if name in ACTIONS:
+                                acted = True
+                        self.log("       " + out.replace("\n", "\n       ")[:1500])
+                        self.emit("tool_result", id=call_id, name=name, ok=ok, text=out[:4000], facts=facts,
+                                  phase=self.project.state()["phase"])
+                    # Every tool call gets an answer, so the saved conversation stays valid for the next turn.
+                    self.messages.append({"role": "tool", "tool_call_id": call_id, "name": name,
+                                          "content": out[:8000]})
                 self.save_transcript()
                 if self.cancel.is_set():
                     return self._finish({"ok": False, "reason": "stopped by the user", "turns": turn + 1})
                 finished, why = self.done()
-                if finished and not why.startswith("stopped"):
-                    # Let the model write its closing summary, then stop.
-                    self.emit("thinking", model=self.model)
-                    final = self.chat()
-                    self.messages.append({"role": "assistant", "content": final.get("content") or ""})
-                    if final.get("content"):
-                        self.log(f"[model] {final['content'].strip()[:500]}")
-                        self.emit("assistant", text=final["content"].strip())
-                    return self._finish({"ok": True, "reason": why, "turns": turn + 1})
-                if finished:
+                if finished and why.startswith("stopped"):
                     return self._finish({"ok": False, "reason": why, "turns": turn + 1})
+                if finished and acted:
+                    settled += 1
+                    if settled > 3:   # the model keeps looking things up after finishing
+                        return self._finish({"ok": True, "reason": why, "turns": turn + 1})
+                # Otherwise let the model read the results: it writes its summary or acts again.
                 continue
+            # A reply without tool calls.
+            if follow_up and not acted:
+                # The user asked something and the model answered without changing the design.
+                return self._finish({"ok": True, "reason": "replied", "turns": turn + 1})
             finished, why = self.done()
             if finished:
                 return self._finish({"ok": not why.startswith("stopped"), "reason": why, "turns": turn + 1})
             idle += 1
             if idle > 3:
                 return self._finish({"ok": False, "reason": "the model stopped calling tools", "turns": turn + 1})
-            nudge = prompts.continue_prompt(self.project.status(), self.max_circuit, self.max_layout)
+            status = self.project.status()
+            status["circuit_attempts"] -= self._base[0]
+            status["layout_attempts"] -= self._base[1]
+            nudge = prompts.continue_prompt(status, self.max_circuit, self.max_layout)
             self.log("[pcbagent] " + nudge.splitlines()[0])
             self.emit("nudge", text=nudge.splitlines()[0])
             self.messages.append({"role": "user", "content": nudge})
         return self._finish({"ok": False, "reason": f"turn limit {max_turns} reached", "turns": max_turns})
+
+
+ACTIONS = {"pcb_spec", "pcb_circuit", "pcb_layout"}   # tools that change the design
 
 
 class ModelError(OSError):
@@ -378,7 +419,7 @@ def _search(args: dict) -> str:
     for key, col in (("kind", "kind"), ("package", "package_norm")):
         if args.get(key):
             where.append(f"{col} = ?")
-            params.append(args[key])
+            params.append(str(args[key]))
     if args.get("value"):
         try:
             v = parse_value(args["value"])
@@ -386,11 +427,15 @@ def _search(args: dict) -> str:
             params += [v * 0.9995, v * 1.0005]
         except UnitError:
             pass
-    for word in str(args.get("query") or "").split():
+    for word in str(args.get("query") or "").split()[:8]:
         where.append("(mpn LIKE ? OR description LIKE ?)")
         params += [f"%{word}%", f"%{word}%"]
     sql = "SELECT * FROM parts" + (" WHERE " + " AND ".join(where) if where else "") + " ORDER BY stock DESC LIMIT ?"
-    params.append(int(args.get("limit") or 10))
+    try:
+        limit = int(args.get("limit") or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    params.append(max(1, min(limit, 50)))
     rows = [db.row_to_dict(r) for r in conn.execute(sql, params)]
     conn.close()
     if not rows:

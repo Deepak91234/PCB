@@ -37,6 +37,14 @@ def _java_version() -> str:
     return f"Java {major or '?'} ({java})"
 
 
+def _ngspice() -> str:
+    exe = find_ngspice()
+    version = ngspice_version(exe)
+    if version == "unknown":
+        raise RuntimeError(f"{exe} does not run as ngspice (`{exe} --version` gave no ngspice version)")
+    return f"ngspice {version} ({exe})"
+
+
 def is_local_url(url: str) -> bool:
     host = urllib.parse.urlparse(url if "://" in url else f"http://{url}").hostname or ""
     if host in ("localhost", "") or host.endswith(".localhost"):
@@ -84,7 +92,7 @@ def _pi() -> str:
 def run_checks() -> dict:
     checks = [
         {"name": "python", "ok": sys.version_info >= (3, 10), "detail": sys.version.split()[0]},
-        _check("ngspice", lambda: f"ngspice {ngspice_version(find_ngspice())} ({find_ngspice()})"),
+        _check("ngspice", _ngspice),
         _check("kicad-cli", lambda: f"KiCad {tools.kicad_version()} ({tools.find_kicad_cli()})"),
         _check("kicad python", lambda: tools.find_kicad_python()),
         _check("footprint library", lambda: str(libs.footprint_dir() or _raise("not found"))),
